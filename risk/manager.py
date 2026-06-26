@@ -1,5 +1,4 @@
 # risk/manager.py
-import pandas as pd
 from utils.config import CONFIG
 from utils.logger import log
 

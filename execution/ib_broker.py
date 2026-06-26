@@ -1,7 +1,6 @@
 # execution/ib_broker.py
-import asyncio
-from ib_async import IB, Stock, MarketOrder, LimitOrder, util
-from typing import Dict, Any, List
+from ib_async import IB, Stock, MarketOrder, LimitOrder, StopOrder
+from typing import Dict, Any, Optional
 from utils.config import CONFIG
 from utils.logger import log
 from execution.broker import Broker
@@ -31,14 +30,16 @@ class IBBroker(Broker):
 
     def get_account_info(self) -> Dict[str, Any]:
         """Fetches account summary."""
-        if not self.connected: self.connect()
+        if not self.connected:
+            self.connect()
         account_values = self.ib.accountValues(self.config['account_id'])
         net_liquidation = next((float(v.value) for v in account_values if v.tag == 'NetLiquidation'), 0.0)
         return {'net_liquidation': net_liquidation, 'account': self.config['account_id']}
 
-    def place_order(self, symbol: str, side: str, quantity: int, order_type: str = 'MKT', limit_price: float = None, stop_price: float = None) -> Dict[str, Any]:
+    def place_order(self, symbol: str, side: str, quantity: int, order_type: str = 'MKT', limit_price: Optional[float] = None, stop_price: Optional[float] = None) -> Dict[str, Any]:
         """Places an order with IBKR."""
-        if not self.connected: self.connect()
+        if not self.connected:
+            self.connect()
 
         # Create a contract for US stocks
         contract = Stock(symbol, 'SMART', 'USD')
@@ -67,9 +68,46 @@ class IBBroker(Broker):
             'avg_price': trade.orderStatus.avgFillPrice
         }
 
+    def place_bracket_short(self, symbol: str, quantity: int, entry_price: float,
+                            stop_price: float, take_profit: float):
+        """Places a short (sell) parent market order with attached stop-loss and take-profit (bracket) orders."""
+        if not self.connected:
+            self.connect()
+
+        contract = Stock(symbol, 'SMART', 'USD')
+        self.ib.qualifyContracts(contract)
+
+        # Parent order (sell short)
+        parent = MarketOrder('SELL', quantity)
+        parent.tif = 'DAY'
+        parent.transmit = False
+
+        # Stop-loss order (buy to cover if price rises to stop_price)
+        stop = StopOrder('BUY', quantity, stop_price)
+        stop.tif = 'DAY'
+        stop.transmit = False
+
+        # Take-profit order (buy to cover if price falls to take_profit)
+        tp = LimitOrder('BUY', quantity, take_profit)
+        tp.tif = 'DAY'
+        tp.transmit = True
+
+        # Place orders: parent first (not transmitted), then child orders
+        parent_trade = self.ib.placeOrder(contract, parent)
+        self.ib.placeOrder(contract, stop)
+        self.ib.placeOrder(contract, tp)
+
+        # Allow a moment for IB to assign an orderId
+        self.ib.sleep(1)
+
+        parent_id = getattr(parent_trade.order, 'orderId', None)
+        log.info(f"Placed bracket short for {symbol}: parent_id={parent_id}")
+        return parent_id
+
     def cancel_order(self, order_id: str) -> bool:
         """Cancels an order by ID."""
-        if not self.connected: self.connect()
+        if not self.connected:
+            self.connect()
         for trade in self.ib.trades():
             if str(trade.order.orderId) == str(order_id):
                 self.ib.cancelOrder(trade.order)
@@ -80,14 +118,15 @@ class IBBroker(Broker):
 
     def get_positions(self) -> list:
         """Returns a list of current positions."""
-        if not self.connected: self.connect()
+        if not self.connected:
+            self.connect()
         positions = []
         for pos in self.ib.positions():
             positions.append({
                 'symbol': pos.contract.symbol,
                 'quantity': pos.position,
-                'avg_cost': pos.avgCost,
-                'market_value': pos.marketValue
+                'avg_cost': getattr(pos, 'avgCost', 0.0),
+                'market_value': getattr(pos, 'marketValue', 0.0)
             })
         return positions
 

@@ -2,7 +2,6 @@
 import os
 import yaml
 from dotenv import load_dotenv
-from pathlib import Path
 
 # Load environment variables from a .env file (for secrets)
 load_dotenv()

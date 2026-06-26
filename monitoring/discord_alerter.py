@@ -1,5 +1,6 @@
 # monitoring/discord_alerter.py
 import requests
+from typing import Optional
 from utils.config import CONFIG
 from utils.logger import log
 
@@ -24,7 +25,7 @@ class DiscordAlerter:
         except Exception as e:
             log.error(f"Failed to send Discord alert: {e}")
 
-    def send_embed(self, title: str, description: str, color: int = 0x00ff00, fields: dict = None):
+    def send_embed(self, title: str, description: str, color: int = 0x00ff00, fields: Optional[dict] = None):
         """
         Sends a rich embed message (looks nicer for trade alerts).
         Color: 0x00ff00 (green) for buy, 0xff0000 (red) for sell, 0xffa500 (orange) for error.

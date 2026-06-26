@@ -1,6 +1,6 @@
 # execution/broker.py
 from abc import ABC, abstractmethod
-from typing import Dict, Any
+from typing import Dict, Any, Optional
 
 class Broker(ABC):
     """Abstract base class for broker-specific execution handlers."""
@@ -16,7 +16,7 @@ class Broker(ABC):
         pass
 
     @abstractmethod
-    def place_order(self, symbol: str, side: str, quantity: int, order_type: str, limit_price: float = None, stop_price: float = None) -> Dict[str, Any]:
+    def place_order(self, symbol: str, side: str, quantity: int, order_type: str, limit_price: Optional[float] = None, stop_price: Optional[float] = None) -> Dict[str, Any]:
         """Places a new order."""
         pass
 
