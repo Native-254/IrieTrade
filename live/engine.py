@@ -13,6 +13,7 @@ from utils.logger import log
 from data.manager import DataManager
 from strategies.trend_following import TrendFollowingLS
 from strategies.mean_revisions import MeanReversion
+from strategies.signals import Signal
 from risk.manager import RiskManager
 from execution.ib_broker import IBBroker
 from monitoring.telegram_alerter import TelegramAlerter
@@ -70,7 +71,7 @@ class TradingEngine:
             else:
                 log.warning(f"Unknown strategy '{name}' in config. Skipping.")
 
-        self.symbols_to_trade = ['AAPL', 'MSFT', 'GOOGL', 'TSLA', 'NVDA', 'AMZN', 'META', 'JPM', 'V', 'MA', 'PG', 'DIS', 'HD', 'BAC', 'VZ', 'ADBE', 'CMCSA', 'NFLX', 'INTC', 'CSCO', 'PFE', 'MRK', 'KO', 'PEP', 'WMT', 'CVX', 'XOM', 'T', 'UNH', 'COST', 'ORCL', 'ABT', 'CRM', 'NKE', 'MCD', 'IBM', 'LLY', 'MDT', 'BMY', 'AMGN', 'SBUX', 'QCOM', 'TXN', 'GILD', 'FISV', 'INTU', 'GE', 'BA', 'CAT', 'MMM', 'AXP', 'SPGI', 'DE', 'DUK', 'SO', 'NEE', 'EXC', 'AEP', 'ED', 'D', 'EIX', 'PEG', 'SRE', 'WEC', 'ES', 'CMS'] # Your watchlist
+        self.symbols_to_trade = ['AAPL', 'MSFT', 'GOOGL', 'TSLA', 'NVDA', 'AMZN', 'META', 'JPM', 'V', 'MA', 'PG', 'DIS', 'HD', 'BAC', 'VZ', 'ADBE', 'CMCSA', 'NFLX', 'INTC', 'CSCO', 'PFE', 'MRK', 'KO', 'PEP', 'WMT', 'CVX', 'XOM', 'T', 'UNH', 'COST', 'ORCL', 'ABT', 'CRM', 'NKE', 'MCD', 'IBM', 'LLY', 'MDT', 'BMY', 'AMGN', 'SBUX', 'QCOM', 'TXN', 'GILD', 'FISV', 'INTU', 'GE', 'BA', 'CAT', 'MMM', 'AXP', 'SPGI', 'DE', 'DUK', 'SO', 'NEE', 'EXC', 'AEP', 'ED', 'D', 'EIX', 'PEG', 'SRE', 'WEC', 'ES', 'CMS','VTI', 'QQQM', 'SMH', 'FDVV', 'FTEC', 'VWO', 'VOO', 'SCHM', 'QQQ', 'SCHA', 'SCHD', 'VGT'] # Your watchlist
         self.is_running = False
         log.success("Trading Engine initialized.")
 
@@ -111,19 +112,16 @@ class TradingEngine:
         # 1. Update Risk Manager with current capital
         account_info = self.broker.get_account_info()
         current_capital = account_info['net_liquidation']
-        # Simplified P&L calculation for the loop
         pnl_change = current_capital - self.risk_manager.current_capital
-        self.risk_manager.update_portfolio(pnl_change, 0) # 0 open_risk_change for now
+        self.risk_manager.update_portfolio(pnl_change, 0)
 
         if not self.risk_manager.can_trade():
             log.warning("Trading halted by risk manager.")
             return
 
-        # 2. For each symbol, generate signals
+        # 2. For each symbol, generate signals and resolve them
         for symbol in self.symbols_to_trade:
             try:
-                # Fetch recent intraday data (e.g., last 7 days of 15-min bars)
-                # Force refresh to get latest incomplete bars
                 end_date = datetime.now()
                 start_date = end_date - timedelta(days=7)
                 df = self.data_manager.get_data(symbol,
@@ -131,31 +129,25 @@ class TradingEngine:
                                                 end_date.strftime('%Y-%m-%d'),
                                                 interval="15m",
                                                 force_refresh=True)
-
                 if df.empty:
                     continue
 
                 last_price = df['close'].iloc[-1]
 
-                # --- TRAILING STOPS & PARTIAL EXITS ---
-                # Check if we have an open position in this symbol
+                # --- TRAILING STOPS (unchanged) ---
                 if symbol in self.open_positions:
                     pos = self.open_positions[symbol]
-                    # Trailing stop logic
                     if pos.side == 'BUY':
-                        # For long positions, update stop-loss upward
                         new_stop = max(pos.stop_loss, last_price * (1 - self.trailing_stop_percent))
                         if new_stop > pos.stop_loss:
                             pos.stop_loss = new_stop
                             log.info(f"Updated trailing stop for {symbol} (BUY): {pos.stop_loss:.2f}")
                     elif pos.side == 'SELL':
-                        # For short positions, update stop-loss downward (toward lower price)
                         new_stop = min(pos.stop_loss, last_price * (1 + self.trailing_stop_percent))
                         if new_stop < pos.stop_loss:
                             pos.stop_loss = new_stop
                             log.info(f"Updated trailing stop for {symbol} (SELL): {pos.stop_loss:.2f}")
                     
-                    # Check if stop-loss triggered
                     if (pos.side == 'BUY' and last_price <= pos.stop_loss) or \
                        (pos.side == 'SELL' and last_price >= pos.stop_loss):
                         pnl_frac = (last_price - pos.entry_price) / pos.entry_price if pos.side == 'BUY' \
@@ -165,144 +157,186 @@ class TradingEngine:
                         log.warning(f"Stop-loss triggered for {symbol}. PnL: {pnl_frac:.4f}")
                         continue
 
-                # 3. Run strategies
+                # --- SIGNAL COLLECTION & RESOLUTION ---
+                signals_to_resolve = []
                 for strategy in self.strategies:
-                    signals = strategy.generate_signals(df)
-                    latest_signal = signals.iloc[-1]
+                    raw = strategy.generate_signals(df).iloc[-1]
+                    # Ensure we have a Signal enum (backward compatibility)
+                    if isinstance(raw, str):
+                        try:
+                            raw = Signal(raw.upper())
+                        except ValueError:
+                            raw = Signal.HOLD
+                    signals_to_resolve.append(raw)
 
-                    if latest_signal != 'HOLD':
-                        log.info(f"Signal detected for {symbol}: {latest_signal} by {strategy.name}")
+                pos = self.open_positions.get(symbol)
+                current_side = pos.side if pos else None
 
-                        # Check for exit signals and handle partial exits
-                        exit_signals = ('EXIT_LONG', 'SELL', 'EXIT_SHORT', 'BUY_TO_COVER')
-                        is_exit_signal = str(latest_signal).upper() in exit_signals
-                        
-                        if is_exit_signal and symbol in self.open_positions:
-                            # Partial exit: close 50% of position
-                            pos = self.open_positions[symbol]
-                            exit_qty = pos.quantity // 2
-                            if exit_qty > 0:
-                                pnl_frac = (last_price - pos.entry_price) / pos.entry_price if pos.side == 'BUY' \
-                                           else (pos.entry_price - last_price) / pos.entry_price
-                                self.trade_results.append(('win' if pnl_frac > 0 else 'loss', pnl_frac))
-                                pos.quantity -= exit_qty
-                                if pos.quantity == 0:
-                                    del self.open_positions[symbol]
-                                log.info(f"Partial exit: sold {exit_qty} of {symbol} at {last_price:.2f}. PnL: {pnl_frac:.4f}")
-                                continue
-                            else:
-                                # Position already mostly closed
-                                if symbol in self.open_positions:
-                                    del self.open_positions[symbol]
-                                continue
+                enter_long = Signal.ENTER_LONG in signals_to_resolve
+                exit_long = Signal.EXIT_LONG in signals_to_resolve
+                enter_short = Signal.ENTER_SHORT in signals_to_resolve
+                exit_short = Signal.EXIT_SHORT in signals_to_resolve
 
-                        # 4. Calculate trade details
-                        last_price = df['close'].iloc[-1]
-                        # Simple ATR for stop-loss (using last 14 periods)
-                        atr = (df['high'] - df['low']).rolling(14).mean().iloc[-1]
-                        stop_loss = last_price - (atr * self.config['risk_management']['volatility_stop_multiplier']) if latest_signal == 'BUY' else last_price + (atr * self.config['risk_management']['volatility_stop_multiplier'])
+                action = None
+                # Resolution rules
+                if exit_long and current_side == 'BUY':
+                    action = 'SELL'                 # close long
+                elif exit_short and current_side == 'SELL':
+                    action = 'BUY_TO_COVER'         # close short
+                elif enter_long and current_side is None:
+                    action = 'BUY'                  # open long
+                elif enter_long and current_side == 'SELL':
+                    action = 'BUY_TO_COVER'         # cover short before going long
+                elif enter_short and current_side is None:
+                    action = 'SELL_SHORT'           # open short
+                elif enter_short and current_side == 'BUY':
+                    action = 'SELL'                 # close long before going short
 
-                        # 5. Calculate position size using Kelly criterion
-                        kelly_risk = self.kelly_fraction()
-                        quantity = strategy.calculate_position_size(
-                            capital=current_capital,
-                            risk_per_trade=kelly_risk,
+                if action is None:
+                    continue
+
+                reasons = []
+                if enter_long:
+                    reasons.append('ENTER_LONG')
+                if exit_long:
+                    reasons.append('EXIT_LONG')
+                if enter_short:
+                    reasons.append('ENTER_SHORT')
+                if exit_short:
+                    reasons.append('EXIT_SHORT')
+                log.info(f"Resolved {symbol}: {reasons} → {action} (current side: {current_side})")
+
+                # --- TRADE EXECUTION ---
+                atr = (df['high'] - df['low']).rolling(14).mean().iloc[-1]
+                vol_stop_mult = self.config['risk_management']['volatility_stop_multiplier']
+
+                # Calculate stop and quantity based on action
+                if action == 'BUY':
+                    stop_loss = last_price - (atr * vol_stop_mult)
+                    quantity = strategy.calculate_position_size(
+                        capital=current_capital,
+                        risk_per_trade=self.kelly_fraction(),
+                        entry_price=last_price,
+                        stop_loss_price=stop_loss
+                    )
+                elif action == 'SELL_SHORT':
+                    stop_loss = last_price + (atr * vol_stop_mult)
+                    quantity = strategy.calculate_position_size(
+                        capital=current_capital,
+                        risk_per_trade=self.kelly_fraction(),
+                        entry_price=last_price,
+                        stop_loss_price=stop_loss
+                    )
+                elif action in ('SELL', 'BUY_TO_COVER'):
+                    # Closing a position – use full position size
+                    if pos:
+                        quantity = pos.quantity
+                        stop_loss = 0.0   # not used when closing
+                    else:
+                        log.warning(f"No position for {symbol} but action {action}. Skipping.")
+                        continue
+                else:
+                    continue
+
+                if quantity == 0:
+                    log.warning(f"Position size for {symbol} is zero. Skipping.")
+                    continue
+
+                # Validate with Risk Manager
+                order_valid, msg = self.risk_manager.validate_order(
+                    symbol, action, quantity, last_price, stop_loss
+                )
+                if not order_valid:
+                    log.warning(f"Order rejected for {symbol}: {msg}")
+                    continue
+
+                # --- EXECUTE ---
+                if self.config['execution']['paper_trading']:
+                    log.success(f"[PAPER] Would {action} {quantity} shares of {symbol} at {last_price:.2f}. Stop: {stop_loss}")
+                    # Update portfolio simulation
+                    if action in ('BUY', 'SELL_SHORT'):
+                        trade_risk = quantity * abs(last_price - stop_loss)
+                        self.risk_manager.update_portfolio(0, trade_risk)
+                        self.open_positions[symbol] = Position(
+                            symbol=symbol,
+                            side='BUY' if action == 'BUY' else 'SELL',
+                            quantity=quantity,
                             entry_price=last_price,
-                            stop_loss_price=stop_loss
+                            stop_loss=stop_loss,
+                            entry_time=datetime.now()
                         )
-                        if quantity == 0:
-                            log.warning(f"Position size for {symbol} is zero. Skipping.")
-                            continue
-
-                        # 6. Validate with Risk Manager
-                        order_valid, msg = self.risk_manager.validate_order(
-                            symbol, latest_signal, quantity, last_price, stop_loss
-                        )
-                        if not order_valid:
-                            log.warning(f"Order rejected for {symbol}: {msg}")
-                            continue
-
-                        # 7. Execute Trade (Paper or Live)
-                        if self.config['execution']['paper_trading']:
-                            log.success(f"[PAPER] Would {latest_signal} {quantity} shares of {symbol} at {last_price:.2f}. Stop: {stop_loss:.2f}")
-                            # Simulate an order for risk manager
-                            trade_risk = quantity * abs(last_price - stop_loss)
-                            self.risk_manager.update_portfolio(0, trade_risk) # P&L change 0 for now
-                            # Track position
-                            entry_side = 'BUY' if latest_signal == 'BUY' else 'SELL'
-                            self.open_positions[symbol] = Position(
-                                symbol=symbol,
-                                side=entry_side,
-                                quantity=quantity,
-                                entry_price=last_price,
-                                stop_loss=stop_loss,
-                                entry_time=datetime.now()
+                    elif action in ('SELL', 'BUY_TO_COVER'):
+                        if pos:
+                            old_risk = pos.quantity * abs(pos.entry_price - pos.stop_loss)
+                            self.risk_manager.update_portfolio(0, -old_risk)
+                            pnl_frac = (last_price - pos.entry_price) / pos.entry_price if pos.side == 'BUY' \
+                                       else (pos.entry_price - last_price) / pos.entry_price
+                            self.trade_results.append(('win' if pnl_frac > 0 else 'loss', pnl_frac))
+                            del self.open_positions[symbol]
+                    # Alerts
+                    self.telegram.send_trade_alert(symbol, action, quantity, last_price)
+                    self.discord.send_trade_alert(symbol, action, quantity, last_price)
+                else:
+                    # --- LIVE TRADING ---
+                    try:
+                        self.broker.connect()
+                        if action == 'SELL_SHORT':
+                            tp_price = last_price - (atr * vol_stop_mult * 2)  # 2:1 RR
+                            order_id = self.broker.place_bracket_short(
+                                symbol, quantity, last_price, stop_loss, tp_price
                             )
-                            self.telegram.send_trade_alert(symbol, latest_signal, quantity, last_price)
-                            self.discord.send_trade_alert(symbol, latest_signal, quantity, last_price)
+                            if order_id:
+                                trade_risk = quantity * abs(last_price - stop_loss)
+                                self.risk_manager.update_portfolio(0, trade_risk)
+                                self.open_positions[symbol] = Position(
+                                    symbol=symbol,
+                                    side='SELL',
+                                    quantity=quantity,
+                                    entry_price=last_price,
+                                    stop_loss=stop_loss,
+                                    entry_time=datetime.now()
+                                )
+                                self.telegram.send_trade_alert(symbol, 'SELL_SHORT', quantity, last_price)
+                                log.success(f"Bracket short placed for {symbol}. Parent order id: {order_id}")
+                            else:
+                                log.error(f"Failed to place bracket short for {symbol}.")
+                                self.telegram.send_error_alert(f"Failed to place bracket short for {symbol}.")
+                                self.discord.send_error_alert(f"Failed to place bracket short for {symbol}.")
                         else:
-                            # --- LIVE TRADING ---
-                            try:
-                                self.broker.connect()
-                                # Handle short-entry bracket orders explicitly
-                                short_signals = ('SELL_SHORT', 'ENTER_SHORT', 'SHORT', 'SELL')
-                                if str(latest_signal).upper() in short_signals:
-                                    vol_stop_mult = self.config['risk_management']['volatility_stop_multiplier']
-                                    tp_price = last_price - (atr * vol_stop_mult * 2)  # 2:1 RR
-                                    order_id = self.broker.place_bracket_short(
-                                        symbol, quantity, last_price, stop_loss, tp_price
+                            order_result = self.broker.place_order(
+                                symbol=symbol,
+                                side=action,
+                                quantity=quantity,
+                                order_type='MKT'
+                            )
+                            if order_result and order_result['status'] == 'Filled':
+                                trade_risk = quantity * abs(last_price - stop_loss) if stop_loss else 0
+                                self.risk_manager.update_portfolio(0, trade_risk)
+                                # Update positions
+                                if action == 'BUY':
+                                    self.open_positions[symbol] = Position(
+                                        symbol=symbol, side='BUY', quantity=quantity,
+                                        entry_price=last_price, stop_loss=stop_loss,
+                                        entry_time=datetime.now()
                                     )
-                                    if order_id:
-                                        trade_risk = quantity * abs(last_price - stop_loss)
-                                        self.risk_manager.update_portfolio(0, trade_risk)
-                                        # Track short position
-                                        self.open_positions[symbol] = Position(
-                                            symbol=symbol,
-                                            side='SELL',
-                                            quantity=quantity,
-                                            entry_price=last_price,
-                                            stop_loss=stop_loss,
-                                            entry_time=datetime.now()
-                                        )
-                                        self.telegram.send_trade_alert(symbol, 'SELL_SHORT', quantity, last_price)
-                                        log.success(f"Bracket short placed for {symbol}. Parent order id: {order_id}")
-                                    else:
-                                        log.error(f"Failed to place bracket short for {symbol}.")
-                                        self.telegram.send_error_alert(f"Failed to place bracket short for {symbol}.")
-                                        self.discord.send_error_alert(f"Failed to place bracket short for {symbol}.")
-                                else:
-                                    order_result = self.broker.place_order(
-                                        symbol=symbol,
-                                        side=latest_signal,
-                                        quantity=quantity,
-                                        order_type='MKT'
-                                    )
-                                    if order_result and order_result['status'] == 'Filled':
-                                        # Update risk manager with the actual trade
-                                        trade_risk = quantity * abs(last_price - stop_loss)
-                                        self.risk_manager.update_portfolio(0, trade_risk)
-                                        # Track position
-                                        entry_side = 'BUY' if latest_signal == 'BUY' else 'SELL'
-                                        self.open_positions[symbol] = Position(
-                                            symbol=symbol,
-                                            side=entry_side,
-                                            quantity=quantity,
-                                            entry_price=last_price,
-                                            stop_loss=stop_loss,
-                                            entry_time=datetime.now()
-                                        )
-                                        self.telegram.send_trade_alert(symbol, latest_signal, quantity, order_result['avg_price'])
-                                        log.success(f"LIVE ORDER EXECUTED: {order_result}")
-                                    else:
-                                        log.error(f"Live order failed for {symbol}. Status: {order_result}")
-                                        self.telegram.send_error_alert(f"Live order failed for {symbol}.")
-                                        self.discord.send_error_alert(f"Live order failed for {symbol}.")
-                            except Exception as e:
-                                log.exception(f"Critical error placing live order for {symbol}: {e}")
-                                self.telegram.send_error_alert(f"Live order exception for {symbol}: {e}")
-                                self.discord.send_error_alert(f"Live order exception for {symbol}: {e}")
-                            finally:
-                                self.broker.disconnect()
+                                elif action in ('SELL', 'BUY_TO_COVER'):
+                                    if pos:
+                                        del self.open_positions[symbol]
+                                        pnl_frac = (order_result['avg_price'] - pos.entry_price) / pos.entry_price if pos.side == 'BUY' \
+                                                   else (pos.entry_price - order_result['avg_price']) / pos.entry_price
+                                        self.trade_results.append(('win' if pnl_frac > 0 else 'loss', pnl_frac))
+                                self.telegram.send_trade_alert(symbol, action, quantity, order_result['avg_price'])
+                                log.success(f"LIVE ORDER EXECUTED: {order_result}")
+                            else:
+                                log.error(f"Live order failed for {symbol}. Status: {order_result}")
+                                self.telegram.send_error_alert(f"Live order failed for {symbol}.")
+                                self.discord.send_error_alert(f"Live order failed for {symbol}.")
+                    except Exception as e:
+                        log.exception(f"Critical error placing live order for {symbol}: {e}")
+                        self.telegram.send_error_alert(f"Live order exception for {symbol}: {e}")
+                        self.discord.send_error_alert(f"Live order exception for {symbol}: {e}")
+                    finally:
+                        self.broker.disconnect()
 
             except Exception as e:
                 log.error(f"Error processing {symbol}: {e}")
