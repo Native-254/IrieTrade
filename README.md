@@ -1,4 +1,4 @@
-# Mkopo Trading Bot
+# IrieTrade Trading Bot
 
 A fully automated, risk‑managed trading bot for the **NYSE** (via Interactive Brokers) with paper‑trading support, Discord/Telegram alerts, and a modular strategy engine. Built from scratch in Python.
 
