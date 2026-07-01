@@ -1,4 +1,5 @@
 # IrieTrade
+<img width="1920" height="1080" alt="IrieTrade" src="https://github.com/user-attachments/assets/8190264a-85b9-47dd-a0d5-f8f92d7347b9" />
 
 ![Irie Trade](assets/irie_trade.png)
 
