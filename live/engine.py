@@ -50,6 +50,9 @@ class TradingEngine:
         # Trailing stop percentage
         self.trailing_stop_percent = 0.02  # 2%
 
+        # NAV history for dashboard
+        self.equity_history: List[Tuple[datetime, float]] = []
+
         # Load intraday parameters for strategies
         intraday_params = self.config['strategies']['parameters'].get('intraday', {})
         
@@ -342,6 +345,9 @@ class TradingEngine:
                 log.error(f"Error processing {symbol}: {e}")
                 self.telegram.send_error_alert(f"Error processing {symbol}: {e}")
                 self.discord.send_error_alert(f"Error processing {symbol}: {e}")
+
+        # Record NAV for dashboard
+        self.equity_history.append((datetime.now(), current_capital))
 
         # Reset simulated open risk at the end of each paper trading iteration
         if self.config['execution']['paper_trading']:
