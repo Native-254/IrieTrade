@@ -7,7 +7,7 @@ A fully automated, risk‑managed trading bot for the **NYSE** (via Interactive 
 ![Bot Status](https://img.shields.io/badge/status-paper_trading-brightgreen)
 ![License](https://img.shields.io/badge/license-MIT-blue)
 ![Python](https://img.shields.io/badge/python-3.11%2B-blue)
-[![Star this repo](https://img.shields.io/github/stars/Native-254/trading-bot?style=social)](https://github.com/Native-254/trading-bot)
+[![Star this repo](https://img.shields.io/github/stars/Native-254/trading-bot?style=social)](https://github.com/Native-254/IrieTrade)
 [![Contributions Welcome](https://img.shields.io/badge/contributions-welcome-brightgreen.svg?style=flat)](CONTRIBUTING.md)
 
 > **💡 Found a bug? Have an idea?**
