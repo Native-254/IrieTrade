@@ -1,12 +1,17 @@
 # IrieTrade
 
-<img width="1920" height="1080" alt="IrieTrade" src="https://github.com/user-attachments/assets/8190264a-85b9-47dd-a0d5-f8f92d7347b9" />
+![IrieTrade](https://github.com/user-attachments/assets/8190264a-85b9-47dd-a0d5-f8f92d7347b9)
 
 A fully automated, risk‑managed trading bot for the **NYSE** (via Interactive Brokers) with paper‑trading support, Discord/Telegram alerts, and a modular strategy engine. Built from scratch in Python.
 
 ![Bot Status](https://img.shields.io/badge/status-paper_trading-brightgreen)
 ![License](https://img.shields.io/badge/license-MIT-blue)
 ![Python](https://img.shields.io/badge/python-3.11%2B-blue)
+[![Star this repo](https://img.shields.io/github/stars/Native-254/trading-bot?style=social)](https://github.com/Native-254/trading-bot)
+[![Contributions Welcome](https://img.shields.io/badge/contributions-welcome-brightgreen.svg?style=flat)](CONTRIBUTING.md)
+
+> **💡 Found a bug? Have an idea?**
+[Open an issue](https://github.com/Native-254/IrieTrade/issues) – every suggestion helps this project grow!
 
 ## ✨ Features
 
@@ -27,7 +32,7 @@ A fully automated, risk‑managed trading bot for the **NYSE** (via Interactive 
 
 ## 🏗️ Architecture
 
-trading_bot/
+IrieTrade/
 ├── config/              # YAML configuration & templates
 ├── data/                # Data providers, manager & cache
 ├── strategies/          # Strategy classes & signal definitions
@@ -58,7 +63,7 @@ trading_bot/
 ### Installation
 
 ```bash
-git clone https://github.com/<your-username>/trading-bot.git
+git clone https://github.com/<your-username>/IrieTrade.git
 cd trading-bot
 python -m venv venv
 source venv/bin/activate   # Windows: venv\Scripts\activate
