@@ -104,7 +104,7 @@ async def dashboard():
     <head>
         <meta charset="UTF-8">
         <meta name="viewport" content="width=device-width, initial-scale=1.0">
-        <title>Mkopo Trading Bot – Live Dashboard</title>
+        <title>Irie Trade – Live Dashboard</title>
         <style>
             body {{
                 margin: 0;
@@ -167,7 +167,7 @@ async def dashboard():
     </head>
     <body>
         <div class="header">
-            <h1>📈 Mkopo Trading Bot</h1>
+            <h1>📈 Irie Trade</h1>
             <div>Last updated: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}</div>
         </div>
         <div class="stats">
@@ -196,7 +196,7 @@ async def dashboard():
             {plot_html}
         </div>
         <div class="footer">
-            © 2026 Mkopo Trading Bot • Data updates every hour
+            © 2026 Irie Trade • Data updates every hour
         </div>
     </body>
     </html>
