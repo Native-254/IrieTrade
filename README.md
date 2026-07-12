@@ -34,25 +34,28 @@ A fully automated, risk‑managed trading bot for the **NYSE** (via Interactive 
 
 ## 🏗️ Architecture
 
-IrieTrade/
+```plaintext
+
+trading_bot/
 ├── config/              # YAML configuration & templates
 ├── data/                # Data providers, manager & cache
 ├── strategies/          # Strategy classes & signal definitions
 │   ├── signals.py
 │   ├── base.py
-│   ├── trend_following.py       # (original long‑only TrendFollowing)
 │   ├── trend_following_ls.py    # (long/short TrendFollowingLS)
 │   └── mean_reversion.py        # (Bollinger Bands + RSI)
 ├── backtest/            # Backtesting engine (vectorbt)
 ├── execution/           # Broker abstraction & IBKR implementation
 ├── risk/                # Risk manager (position sizing, limits)
-├── monitoring/          # Discord & Telegram alerters, health API (FastAPI)
+│   └── position_manager.py
+├── monitoring/          # Discord, Telegram, Email alerters, health API (FastAPI)
 ├── live/                # Main trading engine (orchestrator)
 ├── utils/               # Config loader, logger
 ├── logs/                # Runtime logs
 ├── data/raw/            # Parquet cache
 ├── requirements.txt     # Python dependencies
 └── README.md
+```
 
 ## 🚀 Quick Start
 
@@ -160,11 +163,13 @@ Both can be enabled/disabled independently in the config.
 
 The bot connects to Interactive Brokers via ib_async. In paper mode, you can enable a set of realistic simulation features that make the paper account behave indistinguishably from a live account:
 
-Feature | Description | Config Key
-Slippage | Adds a small adverse price movement (default 0.05%) to every trade | simulate_slippage, slippage_percent
-Commissions | Charges realistic IBKR stock commissions ($0.005/share, min $1, max 1%) | simulate_commissions, commission_*
-Partial fills | Randomly fills only 80‑100% of your order to simulate real market behaviour | simulate_partial_fills, partial_fill_min_ratio
-Short availability | Checks with IBKR that shares are available to short before sending a short order | short_availability_check
+| Feature | Description | Config Key |
+| --------- | ------------- | ------------ |
+| **Slippage** | Adds a small adverse price movement (default 0.05%) to every trade | `simulate_slippage`, `slippage_percent` |
+| **Commissions** | Charges realistic IBKR stock commissions ($0.005/share, min $1, max 1%) | `simulate_commissions`, `commission_*` |
+| **Partial fills** | Randomly fills only 80‑100% of your order to simulate real market behaviour | `simulate_partial_fills`, `partial_fill_min_ratio` |
+| **Short availability** | Checks with IBKR that shares are available to short before sending a short order | `short_availability_check` |
+
 These are enabled by default in paper mode. Disable them when you switch to a live account.
 
 ## 🔔 Alerts & Notifications
