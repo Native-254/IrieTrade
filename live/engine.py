@@ -5,7 +5,7 @@ import threading
 import numpy as np
 import uvicorn
 from datetime import datetime, timedelta
-from typing import List, Tuple
+from typing import Any, List, Optional, Tuple
 
 from utils.config import CONFIG
 from utils.logger import log
@@ -18,20 +18,25 @@ from risk.position_manager import PositionManager, Position
 from execution.ib_broker import IBBroker
 from monitoring.telegram_alerter import TelegramAlerter
 from monitoring.discord_alerter import DiscordAlerter
+from monitoring.email_alerter import EmailAlerter
 from monitoring.api import app as api_app, set_trading_engine
 
 class TradingEngine:
-    def __init__(self):
+    def __init__(self, broker: Optional[Any] = None, data_manager: Optional[Any] = None,
+                 telegram: Optional[Any] = None, discord: Optional[Any] = None,
+                 email: Optional[Any] = None, position_manager: Optional[Any] = None,
+                 risk_manager: Optional[Any] = None, config: Optional[dict] = None):
         log.info("Initializing Trading Engine...")
-        self.config = CONFIG
-        self.data_manager = DataManager()
-        self.broker = IBBroker()
-        self.telegram = TelegramAlerter()
-        self.discord = DiscordAlerter()
+        self.config = config if config is not None else CONFIG
+        self.data_manager = data_manager or DataManager()
+        self.broker = broker or IBBroker()
+        self.telegram = telegram or TelegramAlerter()
+        self.discord = discord or DiscordAlerter()
+        self.email = email or EmailAlerter()
 
         initial_capital = self.broker.get_account_info()['net_liquidation']
-        self.position_manager = PositionManager()
-        self.risk_manager = RiskManager(initial_capital, position_manager=self.position_manager)
+        self.position_manager = position_manager or PositionManager()
+        self.risk_manager = risk_manager or RiskManager(initial_capital, position_manager=self.position_manager)
 
         self.trade_results: List[Tuple[str, float]] = []
         self.open_positions = self.position_manager.positions  # alias for backward compatibility
@@ -129,6 +134,7 @@ class TradingEngine:
                     )
                 if not order_id:
                     log.error(f"Failed to place bracket order for {symbol}")
+                    self.email.send_error_alert(f"Trade failed for {symbol}: failed to place bracket order")
                     return False
                 # Wait a moment for orders to be accepted
                 self.broker.ib.sleep(2)
@@ -141,11 +147,13 @@ class TradingEngine:
                     stop_order_id=order_id,   # parent ID, in practice you'd track children
                     entry_time=datetime.now()
                 ))
+                self.email.send_trade_alert(symbol, action, quantity, last_price)
                 return True
             else:  # SELL or BUY_TO_COVER (closing positions)
                 pos = self.position_manager.positions.get(symbol)
                 if not pos:
                     log.warning(f"No internal position for {symbol}")
+                    self.email.send_error_alert(f"Trade failed for {symbol}: no internal position")
                     return False
                 order_result = self.broker.place_order(
                     symbol=symbol,
@@ -158,12 +166,15 @@ class TradingEngine:
                                if pos.side == 'BUY' else (pos.entry_price - order_result['avg_price']) / pos.entry_price
                     self.trade_results.append(('win' if pnl_frac > 0 else 'loss', pnl_frac))
                     self.position_manager.close_position(symbol)
+                    self.email.send_trade_alert(symbol, action, quantity, order_result['avg_price'])
                     return True
                 else:
                     log.error(f"Failed to close position for {symbol}")
+                    self.email.send_error_alert(f"Trade failed for {symbol}: failed to close position")
                     return False
         except Exception as e:
             log.exception(f"Trade execution error: {e}")
+            self.email.send_error_alert(f"Trade failed for {symbol}: {e}")
             return False
         finally:
             self.broker.disconnect()
