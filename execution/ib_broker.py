@@ -104,6 +104,62 @@ class IBBroker(Broker):
         log.info(f"Placed bracket short for {symbol}: parent_id={parent_id}")
         return parent_id
 
+    def place_bracket_long(self, symbol: str, quantity: int, entry_price: float,
+                           stop_price: float, take_profit: float) -> Optional[int]:
+        """Places a long (buy) parent market order with attached stop-loss and take-profit (bracket) orders."""
+        if not self.connected:
+            self.connect()
+
+        contract = Stock(symbol, 'SMART', 'USD')
+        self.ib.qualifyContracts(contract)
+
+        parent = MarketOrder('BUY', quantity)
+        parent.tif = 'DAY'
+        parent.transmit = False
+
+        stop = StopOrder('SELL', quantity, stop_price)
+        stop.tif = 'DAY'
+        stop.transmit = False
+
+        tp = LimitOrder('SELL', quantity, take_profit)
+        tp.tif = 'DAY'
+        tp.transmit = True
+
+        parent_trade = self.ib.placeOrder(contract, parent)
+        self.ib.placeOrder(contract, stop)
+        self.ib.placeOrder(contract, tp)
+
+        self.ib.sleep(1)
+
+        parent_id = getattr(parent_trade.order, 'orderId', None)
+        log.info(f"Placed bracket long for {symbol}: parent_id={parent_id}")
+        return parent_id
+
+    def update_stop_order(self, order_id: int, new_stop: float):
+        """Cancel old stop order and replace with a new one."""
+        if not self.connected:
+            self.connect()
+
+        for trade in self.ib.trades():
+            if trade.order.orderId == order_id and trade.order.orderType == 'STP':
+                self.ib.cancelOrder(trade.order)
+
+                new_order = StopOrder(
+                    trade.order.action,
+                    trade.order.totalQuantity,
+                    new_stop,
+                    tif='DAY'
+                )
+                new_trade = self.ib.placeOrder(trade.contract, new_order)
+                self.ib.sleep(1)
+
+                new_order_id = getattr(new_trade.order, 'orderId', None)
+                log.info(f"Updated stop order {order_id} -> {new_order_id} at {new_stop}")
+                return new_order_id
+
+        log.warning(f"Stop order {order_id} not found.")
+        return None
+
     def cancel_order(self, order_id: str) -> bool:
         """Cancels an order by ID."""
         if not self.connected:
