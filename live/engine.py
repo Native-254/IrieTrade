@@ -67,6 +67,43 @@ class TradingEngine:
         self.is_running = False
         log.success("Trading Engine initialized.")
 
+    def _apply_slippage(self, price: float, action: str) -> float:
+        """Return a slightly worse price to simulate slippage."""
+        if not self.config['execution'].get('simulate_slippage', False):
+            return price
+        slippage = self.config['execution'].get('slippage_percent', 0.0005)
+        if action in ('BUY', 'BUY_TO_COVER'):
+            return price * (1 + slippage)
+        else:
+            return price * (1 - slippage)
+
+    def _calculate_commission(self, quantity: int, price: float) -> float:
+        """IBKR US stock commission: $0.005/share, min $1, max 1% of trade value."""
+        if not self.config['execution'].get('simulate_commissions', False):
+            return 0.0
+        trade_value = quantity * price
+        per_share = quantity * self.config['execution']['commission_per_share']
+        minimum = self.config['execution']['commission_min']
+        maximum = trade_value * self.config['execution']['commission_max_pct']
+        return max(minimum, min(per_share, maximum))
+
+    def _simulate_partial_fill(self, requested_qty: int) -> int:
+        """Randomly fill only a portion of the order to simulate partial fills."""
+        if not self.config['execution'].get('simulate_partial_fills', False):
+            return requested_qty
+        ratio = np.random.uniform(
+            self.config['execution'].get('partial_fill_min_ratio', 0.8), 1.0
+        )
+        filled = int(requested_qty * ratio)
+        log.info(f"Simulated partial fill: {filled}/{requested_qty}")
+        return max(1, filled)
+
+    def _check_shortable(self, symbol: str, quantity: int) -> bool:
+        """Verify the stock can be shorted with enough shares."""
+        if not self.config['execution'].get('short_availability_check', False):
+            return True
+        return self.broker.is_shortable(symbol, quantity)
+
     def kelly_fraction(self) -> float:
         if not self.trade_results or len(self.trade_results) < 5:
             return 0.02
@@ -112,72 +149,137 @@ class TradingEngine:
                     pos = self.position_manager.positions[sym]
                     pos.quantity = abs(qty)
                     pos.entry_price = avg_cost
+                    # Preserve existing stop configuration across syncs.
+                    if pos.stop_loss == 0.0 and getattr(pos, 'stop_order_id', 0) == 0:
+                        pos.stop_loss = 0.0
         except Exception as e:
             log.error(f"Failed to sync positions: {e}")
 
     def _place_trade(self, symbol: str, action: str, quantity: int,
-                     last_price: float, stop_loss: float,
-                      atr: float, vol_stop_mult: float) -> bool:
-        """Place a trade with bracket orders. Returns True if successful."""
-        try:
-            self.broker.connect()
-            if action in ('BUY', 'SELL_SHORT'):
+                 last_price: float, stop_loss: float,
+                 atr: float, vol_stop_mult: float) -> bool:
+        """
+        Place a trade with realistic slippage, commissions, partial fills,
+        short-availability checks, and bracket orders. Returns True if at least
+        one share was filled.
+        """
+        if action == 'SELL_SHORT' and not self._check_shortable(symbol, quantity):
+            self.email.send_error_alert(f"Short sale rejected for {symbol}: not enough shares")
+            return False
+
+        slipped_price = self._apply_slippage(last_price, action)
+
+        if action in ('BUY', 'SELL_SHORT'):
+            filled_qty = self._simulate_partial_fill(quantity)
+            if filled_qty <= 0:
+                return False
+
+            stop_loss = self._apply_slippage(stop_loss, 'SELL' if action == 'BUY' else 'BUY_TO_COVER')
+            tp_price = slipped_price + (atr * vol_stop_mult * 2) if action == 'BUY' else slipped_price - (atr * vol_stop_mult * 2)
+
+            try:
+                self.broker.connect()
                 if action == 'BUY':
-                    tp_price = last_price + (atr * vol_stop_mult * 2)   # 2:1 RR
                     order_id = self.broker.place_bracket_long(
-                        symbol, quantity, last_price, stop_loss, tp_price
+                        symbol, filled_qty, slipped_price, stop_loss, tp_price
                     )
                 else:
-                    tp_price = last_price - (atr * vol_stop_mult * 2)
                     order_id = self.broker.place_bracket_short(
-                        symbol, quantity, last_price, stop_loss, tp_price
+                        symbol, filled_qty, slipped_price, stop_loss, tp_price
                     )
                 if not order_id:
                     log.error(f"Failed to place bracket order for {symbol}")
-                    self.email.send_error_alert(f"Trade failed for {symbol}: failed to place bracket order")
+                    self.email.send_error_alert(f"Trade failed for {symbol}: bracket order rejected")
                     return False
-                # Wait a moment for orders to be accepted
-                self.broker.ib.sleep(2)
+
+                fill = self.broker.wait_for_fill(order_id)
+                if fill['status'] != 'Filled' or fill['filled'] == 0:
+                    log.error(f"Order not filled for {symbol}: {fill['status']}")
+                    self.email.send_error_alert(f"Trade failed for {symbol}: order not filled ({fill['status']})")
+                    return False
+
+                filled_qty = fill['filled']
+                avg_price = fill['avg_price']
+
+                commission = self._calculate_commission(filled_qty, avg_price)
+                net_entry_price = avg_price + (commission / filled_qty) if action == 'BUY' else avg_price - (commission / filled_qty)
+
+                self.broker.ib.sleep(1)
+                stop_id = self.broker.get_stop_order_id(order_id)
                 self.position_manager.open_position(Position(
                     symbol=symbol,
                     side='BUY' if action == 'BUY' else 'SELL',
-                    quantity=quantity,
-                    entry_price=last_price,
+                    quantity=filled_qty,
+                    entry_price=net_entry_price,
                     stop_loss=stop_loss,
-                    stop_order_id=order_id,   # parent ID, in practice you'd track children
+                    stop_order_id=stop_id,
                     entry_time=datetime.now()
                 ))
-                self.email.send_trade_alert(symbol, action, quantity, last_price)
+
+                self.email.send_trade_alert(symbol, action, filled_qty, avg_price)
+                log.success(f"Filled {action} {filled_qty} {symbol} @ ${avg_price:.2f} (slipped from {last_price:.2f}, net cost {net_entry_price:.2f})")
                 return True
-            else:  # SELL or BUY_TO_COVER (closing positions)
-                pos = self.position_manager.positions.get(symbol)
-                if not pos:
-                    log.warning(f"No internal position for {symbol}")
-                    self.email.send_error_alert(f"Trade failed for {symbol}: no internal position")
-                    return False
+
+            except Exception as e:
+                log.exception(f"Entry execution error for {symbol}: {e}")
+                self.email.send_error_alert(f"Trade failed for {symbol}: {e}")
+                return False
+            finally:
+                self.broker.disconnect()
+
+        else:
+            pos = self.position_manager.positions.get(symbol)
+            if not pos:
+                log.warning(f"No internal position for {symbol}")
+                self.email.send_error_alert(f"Trade failed for {symbol}: no position to close")
+                return False
+
+            filled_qty = self._simulate_partial_fill(quantity)
+            filled_qty = min(filled_qty, pos.quantity)
+
+            try:
+                self.broker.connect()
                 order_result = self.broker.place_order(
                     symbol=symbol,
                     side=action,
-                    quantity=quantity,
+                    quantity=filled_qty,
                     order_type='MKT'
                 )
-                if order_result and order_result['status'] == 'Filled':
-                    pnl_frac = (order_result['avg_price'] - pos.entry_price) / pos.entry_price \
-                               if pos.side == 'BUY' else (pos.entry_price - order_result['avg_price']) / pos.entry_price
-                    self.trade_results.append(('win' if pnl_frac > 0 else 'loss', pnl_frac))
-                    self.position_manager.close_position(symbol)
-                    self.email.send_trade_alert(symbol, action, quantity, order_result['avg_price'])
-                    return True
-                else:
-                    log.error(f"Failed to close position for {symbol}")
-                    self.email.send_error_alert(f"Trade failed for {symbol}: failed to close position")
+                if not order_result:
+                    log.error(f"Failed to place closing order for {symbol}")
+                    self.email.send_error_alert(f"Trade failed for {symbol}: closing order rejected")
                     return False
-        except Exception as e:
-            log.exception(f"Trade execution error: {e}")
-            self.email.send_error_alert(f"Trade failed for {symbol}: {e}")
-            return False
-        finally:
-            self.broker.disconnect()
+
+                fill = self.broker.wait_for_fill(order_result['order_id'])
+                if fill['status'] != 'Filled' or fill['filled'] == 0:
+                    log.error(f"Closing order not filled for {symbol}: {fill['status']}")
+                    self.email.send_error_alert(f"Trade failed for {symbol}: closing order not filled")
+                    return False
+
+                filled_qty = fill['filled']
+                avg_price = fill['avg_price']
+                commission = self._calculate_commission(filled_qty, avg_price)
+                net_close_price = avg_price - (commission / filled_qty) if action == 'SELL' else avg_price + (commission / filled_qty)
+
+                pnl_frac = (net_close_price - pos.entry_price) / pos.entry_price if pos.side == 'BUY' \
+                           else (pos.entry_price - net_close_price) / pos.entry_price
+                self.trade_results.append(('win' if pnl_frac > 0 else 'loss', pnl_frac))
+
+                if filled_qty >= pos.quantity:
+                    self.position_manager.close_position(symbol)
+                else:
+                    pos.quantity -= filled_qty
+
+                self.email.send_trade_alert(symbol, action, filled_qty, avg_price)
+                log.success(f"Closed {action} {filled_qty} {symbol} @ ${avg_price:.2f}, P&L {pnl_frac:.4%}")
+                return True
+
+            except Exception as e:
+                log.exception(f"Exit execution error for {symbol}: {e}")
+                self.email.send_error_alert(f"Trade failed for {symbol}: {e}")
+                return False
+            finally:
+                self.broker.disconnect()
 
     def run_iteration(self):
         log.info(f"--- Running iteration at {datetime.now()} ---")

@@ -1,4 +1,5 @@
 # execution/ib_broker.py
+import time
 from ib_async import IB, Stock, MarketOrder, LimitOrder, StopOrder
 from typing import Dict, Any, Optional
 from utils.config import CONFIG
@@ -135,6 +136,13 @@ class IBBroker(Broker):
         log.info(f"Placed bracket long for {symbol}: parent_id={parent_id}")
         return parent_id
 
+    def get_stop_order_id(self, parent_id: int) -> int:
+        """Return the stop-order child ID for a bracket parent."""
+        for trade in self.ib.trades():
+            if getattr(trade.order, 'parentId', None) == parent_id and getattr(trade.order, 'orderType', None) == 'STP':
+                return trade.order.orderId
+        return 0
+
     def update_stop_order(self, order_id: int, new_stop: float):
         """Cancel old stop order and replace with a new one."""
         if not self.connected:
@@ -185,6 +193,42 @@ class IBBroker(Broker):
                 'market_value': getattr(pos, 'marketValue', 0.0)
             })
         return positions
+
+    def is_shortable(self, symbol: str, quantity: int) -> bool:
+        """Check if there are enough shares to short."""
+        try:
+            contract = Stock(symbol, 'SMART', 'USD')
+            self.ib.qualifyContracts(contract)
+            shortable_func = getattr(self.ib, 'shortableShares', None)
+            if shortable_func is None:
+                log.warning(f"Shortable check unsupported by IB API for {symbol}.")
+                return True
+            details = shortable_func(contract)
+            if details and details.get('shortable', 0) >= quantity:
+                return True
+            log.warning(f"Short sale of {quantity} {symbol} not allowed or insufficient shares.")
+            return False
+        except Exception as e:
+            log.error(f"Shortable check failed for {symbol}: {e}")
+            return False
+
+    def wait_for_fill(self, order_id: int, timeout: int = 30) -> dict:
+        """Wait for an order to fill and return fill details."""
+        start = time.time()
+        while time.time() - start < timeout:
+            for trade in self.ib.trades():
+                if trade.order.orderId == order_id:
+                    status = trade.orderStatus.status
+                    if status == 'Filled':
+                        return {
+                            'filled': trade.orderStatus.filled,
+                            'avg_price': trade.orderStatus.avgFillPrice,
+                            'status': status,
+                        }
+                    elif status in ('Cancelled', 'Inactive', 'ApiCancelled'):
+                        return {'filled': 0, 'status': status}
+            time.sleep(0.5)
+        return {'filled': 0, 'status': 'Timeout'}
 
     def disconnect(self):
         """Cleanly disconnect."""

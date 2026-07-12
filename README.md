@@ -23,12 +23,14 @@ A fully automated, risk‑managed trading bot for the **NYSE** (via Interactive 
 - **Trailing stops & partial exits** – automatically tightens stops and scales out of positions on exit signals.
 - **Intra‑day data** – fetches 15‑minute bars with forced refresh for live trading.
 - **Real‑time dashboard** – FastAPI dashboard showing open positions, equity curve, and trade history.
+- **Realistic paper‑trading simulation** – **simulated slippage, commissions, partial fills, and short‑availability checks** – making the paper account behave exactly like a live account.
+- **Position synchronisation** – internal positions are reconciled with IBKR’s reported positions every iteration.
 - **Data pipeline** – Yahoo Finance historical data with local Parquet caching and rate‑limit handling.
-- **Notifications** – real‑time alerts to Discord (embeds) and Telegram.
+- **Notifications** – real‑time alerts to Discord (embeds), Telegram, and Email.
 - **Backtesting** – vectorized backtesting with `vectorbt` for strategy validation (currently single‑strategy).
 - **Headless operation** – runs 24/7 on a VPS or local machine.
 - **Modular design** – easy to swap data providers, brokers, or strategies.
-- **Paper‑trading first** – built‑in simulation mode for safe testing.
+- **Dependency injection** – all major components can be injected for easy unit testing.
 
 ## 🏗️ Architecture
 
@@ -58,16 +60,17 @@ IrieTrade/
 
 - Python 3.11+
 - Interactive Brokers Gateway (or TWS) with paper trading account
-- (Optional) Discord webhook / Telegram bot for alerts
+- (Optional) Discord webhook / Telegram bot / Gmail app password for alerts
 
 ### Installation
 
 ```bash
-git clone https://github.com/<your-username>/IrieTrade.git
+git clone https://github.com/Native-254/trading-bot.git
 cd trading-bot
 python -m venv venv
 source venv/bin/activate   # Windows: venv\Scripts\activate
 pip install -r requirements.txt
+
 ```
 
 ### Configuration
@@ -86,18 +89,23 @@ pip install -r requirements.txt
    echo "DISCORD_WEBHOOK_URL=https://discord.com/api/webhooks/..." >> .env
    echo "TELEGRAM_BOT_TOKEN=..." >> .env
    echo "TELEGRAM_CHAT_ID=..." >> .env
+   echo "EMAIL_SENDER=your-gmail@gmail.com" >> .env
+   echo "EMAIL_PASSWORD=your-16-char-app-password">>.env
+   echo "EMAIL_RECIPIENT=recipient@email.com" >> .env
    ```
 
 ### Run in Paper Trading Mode
 
 1. **Start IB Gateway** (paper trading) with API enabled (port 4002).
-2. **Launch the bot**:
+2. **Set** paper_trading: false in config/settings.yaml – the bot will now send real bracket orders to the paper account.
+3. **Enable realistic simulations**  in the same config (slippage, commissions, partial fills, short checks – all on by default).
+4. **Launch the bot**:
 
    ```bash
    python live/engine.py
    ```
 
-3. Watch the terminal logs and your Discord/Telegram for trade alerts.
+5. Watch the terminal logs and your Discord/Telegram for trade alerts.
 
 > **Note:** By default, the bot runs the main iteration every hour at :01 (1 minute after the hour). To change the schedule, edit `live/engine.py` (look for `schedule.every`).
 
@@ -132,6 +140,7 @@ The bot enforces strict risk rules before every trade:
 - **Max drawdown** – reduces position sizes after a configurable drawdown from peak equity.
 - **ATR‑based stops** – initial and trailing stop‑losses are calculated using Average True Range.
 - **Bracket orders for shorts** – short entries are placed with attached stop‑loss and take‑profit orders.
+- **Shorrt-availability check** – verifies that shares are available to short before placing a short order.
 
 All values can be adjusted in `config/settings.yaml`.
 
@@ -146,6 +155,30 @@ Rich embeds with trade details (symbol, action, quantity, price) and error alert
 Plain text alerts. Requires a bot token and chat ID (obtain via @BotFather). *(Note: you may need to manually obtain your chat ID from `https://api.telegram.org/bot<TOKEN>/getUpdates` – a 403 error indicates an incorrect chat ID.)*
 
 Both can be enabled/disabled independently in the config.
+
+## ⚡ Execution & Realistic Paper Simulation
+
+The bot connects to Interactive Brokers via ib_async. In paper mode, you can enable a set of realistic simulation features that make the paper account behave indistinguishably from a live account:
+
+Feature | Description | Config Key
+Slippage | Adds a small adverse price movement (default 0.05%) to every trade | simulate_slippage, slippage_percent
+Commissions | Charges realistic IBKR stock commissions ($0.005/share, min $1, max 1%) | simulate_commissions, commission_*
+Partial fills | Randomly fills only 80‑100% of your order to simulate real market behaviour | simulate_partial_fills, partial_fill_min_ratio
+Short availability | Checks with IBKR that shares are available to short before sending a short order | short_availability_check
+These are enabled by default in paper mode. Disable them when you switch to a live account.
+
+## 🔔 Alerts & Notifications
+
+**Discord**
+Rich embeds with trade details (symbol, action, quantity, price) and error alerts. Set up via webhook URL in .env.
+
+**Telegram**
+Plain text alerts. Requires a bot token and chat ID (obtain via @BotFather).
+
+**Email**
+Trade alerts and critical error messages sent via Gmail SMTP. Add EMAIL_SENDER, EMAIL_PASSWORD, and EMAIL_RECIPIENT to your .env.
+
+All three channels can be enabled/disabled independently.
 
 ## 🧪 Backtesting
 
