@@ -35,7 +35,12 @@ class IBBroker(Broker):
             self.connect()
         account_values = self.ib.accountValues(self.config['account_id'])
         net_liquidation = next((float(v.value) for v in account_values if v.tag == 'NetLiquidation'), 0.0)
-        return {'net_liquidation': net_liquidation, 'account': self.config['account_id']}
+        unrealized_pnl = next((float(v.value) for v in account_values if v.tag == 'UnrealizedPnL'), 0.0)
+        return {
+            'net_liquidation': net_liquidation,
+            'account': self.config['account_id'],
+            'unrealized_pnl': unrealized_pnl,
+        }
 
     def place_order(self, symbol: str, side: str, quantity: int, order_type: str = 'MKT', limit_price: Optional[float] = None, stop_price: Optional[float] = None) -> Dict[str, Any]:
         """Places an order with IBKR."""

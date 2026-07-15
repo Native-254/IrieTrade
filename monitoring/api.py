@@ -55,6 +55,14 @@ async def dashboard():
     total_return = (last_nav - first_nav) / first_nav * 100
     daily_change = df['nav'].iloc[-1] - df['nav'].iloc[-2] if len(df) > 1 else 0
     daily_pct = (daily_change / df['nav'].iloc[-2]) * 100 if len(df) > 1 else 0
+    current_capital = trading_engine.risk_manager.current_capital
+    latest_prices = getattr(trading_engine, 'latest_prices', {}) or {}
+    unrealized_pnl = 0.0
+    try:
+        account_info = trading_engine.broker.get_account_info()
+        unrealized_pnl = account_info.get('unrealized_pnl', 0.0)
+    except Exception:
+        unrealized_pnl = 0.0
 
     # Plotly chart
     fig = make_subplots(rows=1, cols=1)
@@ -75,8 +83,8 @@ async def dashboard():
     fig.update_layout(
         template='plotly_dark',
         title={
-            'text': 'Equity Curve',
-            'x': 0.1,
+            'text': f'IrieTrade Equity Curve ({df.index[0].strftime("%b %d")} – {df.index[-1].strftime("%b %d")})',
+            'x': 0.05,
             'font': {'size': 24, 'family': 'Arial Black'}
         },
         xaxis=dict(showgrid=False, zeroline=False),
@@ -97,6 +105,39 @@ async def dashboard():
 
     # Number of open positions
     open_pos = len(trading_engine.open_positions)
+    bot_status = "Running" if trading_engine.is_running else "Stopped"
+    daily_pnl = trading_engine.risk_manager.daily_pnl
+    portfolio_heat = (
+        trading_engine.risk_manager.open_risk / current_capital * 100
+        if current_capital else 0.0
+    )
+    unrealized_pnl = 0.0
+    if getattr(trading_engine, 'last_account_info', None):
+        unrealized_pnl = float(trading_engine.last_account_info.get('UnrealizedPnL', 0.0))
+
+    position_rows = ""
+    if trading_engine.open_positions:
+        latest_prices = getattr(trading_engine, 'latest_prices', {}) or {}
+        for pos in trading_engine.open_positions.values():
+            current_price = latest_prices.get(pos.symbol, pos.entry_price)
+            if pos.side == 'BUY':
+                pnl = (current_price - pos.entry_price) * pos.quantity
+            else:
+                pnl = (pos.entry_price - current_price) * pos.quantity
+            pnl_class = 'metric-positive' if pnl >= 0 else 'metric-negative'
+            position_rows += f"""
+                <tr>
+                    <td>{pos.symbol}</td>
+                    <td>{pos.side}</td>
+                    <td>{pos.quantity}</td>
+                    <td>${pos.entry_price:,.2f}</td>
+                    <td>${pos.stop_loss:,.2f}</td>
+                    <td>${current_price:,.2f}</td>
+                    <td class="{pnl_class}">{pnl:+,.2f}</td>
+                </tr>
+            """
+    else:
+        position_rows = "<tr><td colspan='7'>No active positions</td></tr>"
 
     return HTMLResponse(f"""
     <!DOCTYPE html>
@@ -104,99 +145,159 @@ async def dashboard():
     <head>
         <meta charset="UTF-8">
         <meta name="viewport" content="width=device-width, initial-scale=1.0">
+        <meta http-equiv="refresh" content="60">
         <title>Irie Trade – Live Dashboard</title>
         <style>
+            :root {{
+                color-scheme: dark;
+                font-family: 'Inter', 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+                background: #080c14;
+                color: #e9edf5;
+            }}
+            * {{ box-sizing: border-box; }}
             body {{
                 margin: 0;
-                padding: 0;
-                background: #0b111a;
-                font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
-                color: #dfe6e9;
+                min-height: 100vh;
             }}
-            .header {{
-                background: linear-gradient(135deg, #0b111a 0%, #1e1e2f 100%);
-                padding: 20px 40px;
-                border-bottom: 1px solid #2d3436;
-                display: flex;
-                justify-content: space-between;
-                align-items: center;
-            }}
-            .header h1 {{
-                font-weight: 700;
-                font-size: 28px;
-                color: #00cec9;
-            }}
-            .stats {{
-                display: flex;
-                gap: 30px;
-                padding: 20px 40px;
-                background: #101624;
-                flex-wrap: wrap;
-            }}
-            .stat-box {{
-                background: #141d2e;
-                padding: 15px 25px;
-                border-radius: 8px;
-                border-left: 4px solid #00cec9;
-                min-width: 150px;
-            }}
-            .stat-label {{
-                font-size: 12px;
-                text-transform: uppercase;
-                color: #b2bec3;
-                letter-spacing: 1px;
-            }}
-            .stat-value {{
-                font-size: 24px;
-                font-weight: bold;
-                margin-top: 5px;
-            }}
-            .positive {{ color: #00b894; }}
-            .negative {{ color: #e17055; }}
-            .chart-container {{
-                padding: 20px;
-                background: #0b111a;
-            }}
-            .footer {{
-                text-align: center;
-                padding: 10px;
-                color: #636e72;
-                font-size: 12px;
-            }}
+            .layout {{ display: grid; grid-template-columns: 260px 1fr; gap: 24px; padding: 24px; background: radial-gradient(circle at top left, rgba(0, 184, 148, 0.12), transparent 28%), radial-gradient(circle at bottom right, rgba(255, 121, 198, 0.08), transparent 30%), #080c14; }}
+            .sidebar {{ background: rgba(12, 18, 31, 0.95); border: 1px solid rgba(255,255,255,0.06); border-radius: 28px; padding: 28px; display: flex; flex-direction: column; gap: 28px; }}
+            .brand {{ display: flex; align-items: center; gap: 14px; }}
+            .brand-dot {{ width: 14px; height: 14px; border-radius: 50%; background: linear-gradient(135deg, #00e6b8, #00a0ff); }}
+            .brand-title {{ font-size: 24px; font-weight: 800; letter-spacing: -0.02em; color: #ffffff; }}
+            .nav-item {{ display: block; padding: 14px 16px; border-radius: 18px; color: #b0becd; text-decoration: none; transition: all 0.2s ease; }}
+            .nav-item.active, .nav-item:hover {{ background: rgba(255,255,255,0.06); color: #ffffff; }}
+            .panel {{ background: rgba(13, 21, 37, 0.95); border: 1px solid rgba(255,255,255,0.06); border-radius: 28px; padding: 24px; backdrop-filter: blur(18px); }}
+            .panel-header {{ display: flex; justify-content: space-between; align-items: flex-start; gap: 12px; margin-bottom: 20px; }}
+            .panel-header h1 {{ margin: 0; font-size: 32px; letter-spacing: -0.04em; }}
+            .panel-header p {{ margin: 6px 0 0; color: #94a3b8; }}
+            .grid-cols-2 {{ display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 20px; }}
+            .stat-grid {{ display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 18px; margin-top: 18px; }}
+            .stat-card {{ background: linear-gradient(180deg, rgba(255,255,255,0.04), rgba(255,255,255,0.01)); border: 1px solid rgba(255,255,255,0.06); border-radius: 24px; padding: 20px; }}
+            .stat-label {{ font-size: 12px; text-transform: uppercase; letter-spacing: 0.14em; color: #7b8a99; margin-bottom: 10px; }}
+            .stat-value {{ font-size: 28px; font-weight: 700; line-height: 1.1; }}
+            .stat-subtext {{ margin-top: 8px; color: #7b8a99; font-size: 13px; }}
+            .metric-positive {{ color: #00d084; }}
+            .metric-negative {{ color: #ff7c7c; }}
+            .asset-grid {{ display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 18px; margin-top: 18px; }}
+            .asset-card {{ background: rgba(6, 12, 24, 0.92); border: 1px solid rgba(255,255,255,0.05); border-radius: 24px; padding: 20px; }}
+            .asset-card h3 {{ margin: 0; font-size: 18px; }}
+            .asset-value {{ font-size: 22px; font-weight: 700; margin-top: 12px; }}
+            .asset-change {{ margin-top: 8px; color: #7b8a99; }}
+            .positions-table {{ width: 100%; border-collapse: collapse; margin-top: 14px; }}
+            .positions-table th, .positions-table td {{ padding: 14px 12px; text-align: left; border-bottom: 1px solid rgba(255,255,255,0.06); font-size: 14px; }}
+            .positions-table th {{ color: #94a3b8; font-weight: 600; }}
+            .positions-empty td {{ color: #7b8a99; text-align: center; }}
+            .chart-card {{ min-height: 420px; }}
+            .footer {{ margin-top: 24px; text-align: center; color: #5f788f; font-size: 13px; }}
+            @media (max-width: 1100px) {{ .layout {{ grid-template-columns: 1fr; }} .stat-grid, .asset-grid {{ grid-template-columns: 1fr; }} }}
         </style>
     </head>
     <body>
-        <div class="header">
-            <h1>📈 Irie Trade</h1>
-            <div>Last updated: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}</div>
-        </div>
-        <div class="stats">
-            <div class="stat-box">
-                <div class="stat-label">Net Asset Value</div>
-                <div class="stat-value">${last_nav:,.2f}</div>
-            </div>
-            <div class="stat-box">
-                <div class="stat-label">Daily Change</div>
-                <div class="stat-value {('positive' if daily_change >= 0 else 'negative')}">
-                    {daily_change:+,.2f} ({daily_pct:+.2f}%)
+        <div class="layout">
+            <aside class="sidebar">
+                <div class="brand">
+                    <div class="brand-dot"></div>
+                    <div class="brand-title">IrieTrade</div>
                 </div>
-            </div>
-            <div class="stat-box">
-                <div class="stat-label">Total Return</div>
-                <div class="stat-value {('positive' if total_return >= 0 else 'negative')}">
-                    {total_return:+.2f}%
+                <a class="nav-item active" href="#overview">Live Dashboard</a>
+                <a class="nav-item" href="#positions">Portfolio</a>
+                <a class="nav-item" href="#alerts">Alerts</a>
+                <a class="nav-item" href="#overview">Settings</a>
+                <a class="nav-item" href="#overview">Support</a>
+            </aside>
+            <main>
+                <section id="overview" class="panel">
+                    <div class="panel-header">
+                        <div>
+                            <h1>Live portfolio overview</h1>
+                            <p>Monitor NAV, risk, positions, and bot health without interrupting execution.</p>
+                        </div>
+                        <div>
+                            <div class="stat-label">Status</div>
+                            <div class="stat-value">{bot_status}</div>
+                        </div>
+                    </div>
+                    <div class="stat-grid">
+                        <div class="stat-card">
+                            <div class="stat-label">Net Asset Value</div>
+                            <div class="stat-value">${last_nav:,.2f}</div>
+                            <div class="stat-subtext">Current portfolio value</div>
+                        </div>
+                        <div class="stat-card">
+                            <div class="stat-label">Daily P&L</div>
+                            <div class="stat-value {('metric-positive' if daily_pnl >= 0 else 'metric-negative')}">{daily_pnl:+,.2f}</div>
+                            <div class="stat-subtext">{daily_pct:+.2f}% change</div>
+                        </div>
+                        <div class="stat-card">
+                            <div class="stat-label">Unrealised P&L</div>
+                            <div class="stat-value {('metric-positive' if unrealized_pnl >= 0 else 'metric-negative')}">{unrealized_pnl:+,.2f}</div>
+                            <div class="stat-subtext">Mark‑to‑market</div>
+                        </div>
+                        <div class="stat-card">
+                            <div class="stat-label">Portfolio Heat</div>
+                            <div class="stat-value">{portfolio_heat:.1f}%</div>
+                            <div class="stat-subtext">Open risk vs capital</div>
+                        </div>
+                    </div>
+                    <div class="asset-grid">
+                        <div class="asset-card">
+                            <h3>Equity trend</h3>
+                            <div class="asset-value">{total_return:+.2f}%</div>
+                            <div class="asset-change">Total return from first tracked NAV point</div>
+                        </div>
+                        <div class="asset-card">
+                            <h3>Unrealized P&L</h3>
+                            <div class="asset-value {('metric-positive' if unrealized_pnl >= 0 else 'metric-negative')}">{unrealized_pnl:+,.2f}</div>
+                            <div class="asset-change">Broker unrealized P&L</div>
+                        </div>
+                        <div class="asset-card">
+                            <h3>Positions</h3>
+                            <div class="asset-value">{open_pos}</div>
+                            <div class="asset-change">Active position count</div>
+                        </div>
+                        <div class="asset-card">
+                            <h3>Latest refresh</h3>
+                            <div class="asset-value">{datetime.now().strftime('%H:%M:%S')}</div>
+                            <div class="asset-change">Real-time dashboard snapshot</div>
+                        </div>
+                    </div>
+                </section>
+
+                <section class="panel chart-card">
+                    {plot_html}
+                </section>
+
+                <section id="positions" class="panel">
+                    <div class="panel-header">
+                        <div>
+                            <h1>Open Positions</h1>
+                            <p>A snapshot of current portfolio exposure.</p>
+                        </div>
+                    </div>
+                    <div style="overflow-x:auto;">
+                        <table class="positions-table">
+                            <thead>
+                                <tr>
+                                    <th>Symbol</th>
+                                    <th>Side</th>
+                                    <th>Qty</th>
+                                    <th>Entry</th>
+                                    <th>Stop</th>
+                                    <th>Current</th>
+                                    <th>U-P&L</th>
+                                </tr>
+                            </thead>
+                            <tbody>
+                                {position_rows}
+                            </tbody>
+                        </table>
+                    </div>
+                </section>
+
+                <div class="footer">
+                    © 2026 Irie Trade • Data updates every hour • Dashboard is read-only and does not impact bot execution.
                 </div>
-            </div>
-            <div class="stat-box">
-                <div class="stat-label">Open Positions</div>
-                <div class="stat-value">{open_pos}</div>
-            </div>
-        </div>
-        <div class="chart-container">
-            {plot_html}
-        </div>
-        <div class="footer">
-            © 2026 Irie Trade • Data updates every hour
+            </main>
         </div>
     </body>
     </html>

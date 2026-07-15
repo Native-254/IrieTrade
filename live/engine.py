@@ -4,6 +4,7 @@ import schedule
 import threading
 import numpy as np
 import uvicorn
+import yfinance as yf
 from datetime import datetime, timedelta
 from typing import Any, List, Optional, Tuple
 
@@ -43,6 +44,9 @@ class TradingEngine:
 
         self.trailing_stop_percent = 0.02
         self.equity_history: List[Tuple[datetime, float]] = []
+        self.latest_prices: dict = {}
+        self.last_account_info: dict = {}
+        self.latest_prices: dict = {}
 
         # Load strategies (intraday params)
         intraday_params = self.config['strategies']['parameters'].get('intraday', {})
@@ -104,6 +108,46 @@ class TradingEngine:
             return True
         return self.broker.is_shortable(symbol, quantity)
 
+    def _earnings_nearby(self, symbol: str) -> bool:
+        """Return True if the next earnings date is within the avoidance window."""
+        if not self.config['execution'].get('earnings_avoidance', False):
+            return False
+        try:
+            ticker = yf.Ticker(symbol)
+            ed = ticker.earnings_dates
+            if ed is not None and not ed.empty:
+                next_earnings = ed.index[0].to_pydatetime()
+                days_until = (next_earnings - datetime.now()).days
+                return 0 <= days_until <= self.config['execution'].get('earnings_avoidance_days', 5)
+        except Exception as e:
+            log.debug(f"Could not fetch earnings for {symbol}: {e}")
+        return False
+
+    def _check_net_exposure(self, action: str, symbol: str, quantity: int,
+                            last_price: float, latest_prices: dict) -> bool:
+        """Return False if the new trade would breach max net exposure."""
+        max_net = self.config['risk_management'].get('max_net_exposure', 1.0)
+        if max_net >= 999:
+            return True
+
+        notional = quantity * last_price
+        if action == 'BUY':
+            delta_long = notional
+            delta_short = 0
+        elif action == 'SELL_SHORT':
+            delta_long = 0
+            delta_short = notional
+        else:
+            return True
+
+        current_net = self.risk_manager.get_net_exposure(latest_prices)
+        new_net = current_net + delta_long - delta_short
+
+        if abs(new_net) > max_net * self.risk_manager.current_capital:
+            log.warning(f"Net exposure {new_net:.2f} would exceed limit {max_net*self.risk_manager.current_capital:.2f}")
+            return False
+        return True
+
     def kelly_fraction(self) -> float:
         if not self.trade_results or len(self.trade_results) < 5:
             return 0.02
@@ -163,6 +207,13 @@ class TradingEngine:
         short-availability checks, and bracket orders. Returns True if at least
         one share was filled.
         """
+        if self._earnings_nearby(symbol):
+            self.email.send_error_alert(
+                f"Trade skipped for {symbol}: earnings within {self.config['execution']['earnings_avoidance_days']} days."
+            )
+            log.warning(f"Earnings nearby for {symbol}, trade blocked in _place_trade.")
+            return False
+
         if action == 'SELL_SHORT' and not self._check_shortable(symbol, quantity):
             self.email.send_error_alert(f"Short sale rejected for {symbol}: not enough shares")
             return False
@@ -286,6 +337,7 @@ class TradingEngine:
 
         # 1. Update risk manager with current capital
         account_info = self.broker.get_account_info()
+        self.last_account_info = account_info
         current_capital = account_info['net_liquidation']
         pnl_change = current_capital - self.risk_manager.current_capital
         self.risk_manager.update_portfolio(pnl_change, 0)
@@ -328,6 +380,8 @@ class TradingEngine:
             if (pos.side == 'BUY' and last_price <= pos.stop_loss) or \
                (pos.side == 'SELL' and last_price >= pos.stop_loss):
                 log.warning(f"Stop-loss triggered for {sym}. Broker will close.")
+
+        self.latest_prices = latest_prices
 
         # Recalculate open risk with latest prices
         self.risk_manager.recalc_open_risk(latest_prices)
@@ -428,6 +482,22 @@ class TradingEngine:
                 log.warning(f"Order rejected for {symbol}: {msg}")
                 continue
 
+            # Net exposure check
+            if not self._check_net_exposure(action, symbol, quantity, last_price, latest_prices):
+                log.warning(f"Order rejected for {symbol} due to net exposure limit.")
+                self.email.send_error_alert(
+                    f"Order for {symbol} rejected: net exposure limit reached."
+                )
+                continue
+
+            # Earnings avoidance
+            if self._earnings_nearby(symbol):
+                log.warning(f"Earnings nearby for {symbol}, skipping trade.")
+                self.email.send_error_alert(
+                    f"Trade skipped for {symbol}: earnings within {self.config['execution']['earnings_avoidance_days']} days."
+                )
+                continue
+
             # Execute trade (always send to broker, even in paper mode)
             success = self._place_trade(symbol, action, quantity, last_price,
                                         stop_loss, atr, vol_stop_mult)
@@ -436,8 +506,9 @@ class TradingEngine:
                 self.telegram.send_trade_alert(symbol, action, quantity, last_price)
                 self.discord.send_trade_alert(symbol, action, quantity, last_price)
 
-        # Record NAV for dashboard
+        # Record NAV and latest market prices for dashboard
         self.equity_history.append((datetime.now(), current_capital))
+        self.latest_prices = latest_prices
 
     def start(self):
         self.is_running = True

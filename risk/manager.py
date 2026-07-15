@@ -49,6 +49,23 @@ class RiskManager:
         self.open_risk = total_risk
         log.debug(f"Recalculated open risk: {self.open_risk:.2f}")
 
+    def get_net_exposure(self, latest_prices: dict) -> float:
+        """Return long_notional - short_notional, using latest market prices."""
+        if not self.position_manager:
+            return 0.0
+        long_exp = 0.0
+        short_exp = 0.0
+        for pos in self.position_manager.positions.values():
+            price = latest_prices.get(pos.symbol, pos.entry_price)
+            notional = pos.quantity * price
+            if pos.side == 'BUY':
+                long_exp += notional
+            else:
+                short_exp += notional
+        net = long_exp - short_exp
+        log.debug(f"Net exposure computed: {net:.2f} (long {long_exp:.2f}, short {short_exp:.2f})")
+        return net
+
     def update_portfolio(self, pnl_change: float, open_risk_change: float):
         self.current_capital += pnl_change
         self.daily_pnl += pnl_change
