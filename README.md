@@ -97,6 +97,18 @@ pip install -r requirements.txt
    echo "EMAIL_RECIPIENT=recipient@email.com" >> .env
    ```
 
+3. **Optional: Use Brevo for email alerts** instead of Gmail SMTP.
+
+   ```bash
+   echo "EMAIL_SENDER=your-brevo-verified-address@example.com" >> .env
+   echo "EMAIL_RECIPIENT=recipient@email.com" >> .env
+   echo "EMAIL_BREVO_API_KEY=your_brevo_api_key" >> .env
+   ```
+
+   - Brevo is now the primary email transport.
+   - SMTP remains available as a fallback if Brevo is not configured or fails.
+   - Use this when SMTP is blocked or when you prefer API-based delivery.
+
 ### Run in Paper Trading Mode
 
 1. **Start IB Gateway** (paper trading) with API enabled (port 4002).
