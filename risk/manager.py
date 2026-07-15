@@ -49,6 +49,28 @@ class RiskManager:
         self.open_risk = total_risk
         log.debug(f"Recalculated open risk: {self.open_risk:.2f}")
 
+    def get_gross_exposure(self, latest_prices: dict) -> float:
+        """Return total notional of all positions."""
+        if not self.position_manager:
+            return 0.0
+        gross = 0.0
+        for pos in self.position_manager.positions.values():
+            price = latest_prices.get(pos.symbol, pos.entry_price)
+            gross += pos.quantity * price
+        log.debug(f"Gross exposure computed: {gross:.2f}")
+        return gross
+
+    def get_position_notional(self, symbol: str, price: float) -> float:
+        """Return notional of a single position."""
+        if not self.position_manager:
+            return 0.0
+        pos = self.position_manager.positions.get(symbol)
+        if pos:
+            notional = pos.quantity * price
+            log.debug(f"Position notional for {symbol}: {notional:.2f}")
+            return notional
+        return 0.0
+
     def get_net_exposure(self, latest_prices: dict) -> float:
         """Return long_notional - short_notional, using latest market prices."""
         if not self.position_manager:

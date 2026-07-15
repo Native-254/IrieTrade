@@ -46,7 +46,8 @@ class TradingEngine:
         self.equity_history: List[Tuple[datetime, float]] = []
         self.latest_prices: dict = {}
         self.last_account_info: dict = {}
-        self.latest_prices: dict = {}
+        self.unrealized_pnl: float = 0.0
+        self.realized_pnl: float = 0.0
 
         # Load strategies (intraday params)
         intraday_params = self.config['strategies']['parameters'].get('intraday', {})
@@ -335,10 +336,12 @@ class TradingEngine:
     def run_iteration(self):
         log.info(f"--- Running iteration at {datetime.now()} ---")
 
-        # 1. Update risk manager with current capital
+        # 1. Update risk manager with current capital and broker P&L details
         account_info = self.broker.get_account_info()
         self.last_account_info = account_info
         current_capital = account_info['net_liquidation']
+        self.unrealized_pnl = float(account_info.get('UnrealizedPnL', 0.0))
+        self.realized_pnl = float(account_info.get('RealizedPnL', 0.0))
         pnl_change = current_capital - self.risk_manager.current_capital
         self.risk_manager.update_portfolio(pnl_change, 0)
 
@@ -474,7 +477,33 @@ class TradingEngine:
             if quantity == 0:
                 continue
 
-            # Risk validation
+            # 4. Gross exposure check (new entries only)
+            proposed_notional = quantity * last_price
+            current_gross = self.risk_manager.get_gross_exposure(latest_prices)
+            new_gross = current_gross + proposed_notional
+            max_gross = current_capital * self.config['risk_management'].get('max_gross_exposure', 1.5)
+            if new_gross > max_gross:
+                log.warning(
+                    f"Order rejected for {symbol}: gross exposure {new_gross:.2f} exceeds limit {max_gross:.2f}"
+                )
+                self.email.send_error_alert(
+                    f"Order for {symbol} rejected: gross exposure limit reached."
+                )
+                continue
+
+            # 5. Single-name position limit
+            max_single = current_capital * self.config['risk_management'].get('max_position_pct', 0.2)
+            existing_notional = self.risk_manager.get_position_notional(symbol, last_price)
+            new_single = existing_notional + proposed_notional
+            if new_single > max_single:
+                log.warning(
+                    f"Order rejected for {symbol}: position notional {new_single:.2f} exceeds single-name limit {max_single:.2f}"
+                )
+                self.email.send_error_alert(
+                    f"Order for {symbol} rejected: single-name position limit reached."
+                )
+                continue
+
             order_valid, msg = self.risk_manager.validate_order(
                 symbol, action, quantity, last_price, stop_loss
             )

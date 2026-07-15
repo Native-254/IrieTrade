@@ -57,12 +57,18 @@ async def dashboard():
     daily_pct = (daily_change / df['nav'].iloc[-2]) * 100 if len(df) > 1 else 0
     current_capital = trading_engine.risk_manager.current_capital
     latest_prices = getattr(trading_engine, 'latest_prices', {}) or {}
-    unrealized_pnl = 0.0
-    try:
-        account_info = trading_engine.broker.get_account_info()
-        unrealized_pnl = account_info.get('unrealized_pnl', 0.0)
-    except Exception:
-        unrealized_pnl = 0.0
+    unrealized_pnl = getattr(trading_engine, 'unrealized_pnl', 0.0)
+    realized_pnl = getattr(trading_engine, 'realized_pnl', 0.0)
+    trading_total = unrealized_pnl + realized_pnl
+    interest_effect = (last_nav - first_nav) - trading_total
+
+    # Compute rolling 30-day Sharpe if we have enough history
+    rolling_sharpe = None
+    if len(df) >= 30:
+        daily_returns = df['nav'].pct_change().dropna()
+        if len(daily_returns) >= 30:
+            sharpe_series = (daily_returns.rolling(30).mean() / daily_returns.rolling(30).std()) * (252 ** 0.5)
+            rolling_sharpe = sharpe_series.iloc[-1] if not sharpe_series.empty else None
 
     # Plotly chart
     fig = make_subplots(rows=1, cols=1)
@@ -111,9 +117,6 @@ async def dashboard():
         trading_engine.risk_manager.open_risk / current_capital * 100
         if current_capital else 0.0
     )
-    unrealized_pnl = 0.0
-    if getattr(trading_engine, 'last_account_info', None):
-        unrealized_pnl = float(trading_engine.last_account_info.get('UnrealizedPnL', 0.0))
 
     position_rows = ""
     if trading_engine.open_positions:
@@ -133,11 +136,23 @@ async def dashboard():
                     <td>${pos.entry_price:,.2f}</td>
                     <td>${pos.stop_loss:,.2f}</td>
                     <td>${current_price:,.2f}</td>
-                    <td class="{pnl_class}">{pnl:+,.2f}</td>
+                    <td class=\"{pnl_class}\">{pnl:+,.2f}</td>
                 </tr>
             """
     else:
         position_rows = "<tr><td colspan='7'>No active positions</td></tr>"
+
+    recent_trades_html = ""
+    if getattr(trading_engine, 'trade_results', None):
+        recent_trades_html = "<ul style='list-style:none; padding:0; color:#b0becd; font-size:14px;'>"
+        for result_type, pnl_frac in trading_engine.trade_results[-10:]:
+            color = "#00d084" if result_type == 'win' else "#ff7c7c"
+            recent_trades_html += (
+                f"<li style='margin:4px 0;'><span style='color:{color};'>{result_type.upper()}</span> - {pnl_frac:+.2%}</li>"
+            )
+        recent_trades_html += "</ul>"
+    else:
+        recent_trades_html = "<p>No closed trades yet.</p>"
 
     return HTMLResponse(f"""
     <!DOCTYPE html>
@@ -234,6 +249,21 @@ async def dashboard():
                             <div class="stat-subtext">Mark‑to‑market</div>
                         </div>
                         <div class="stat-card">
+                            <div class="stat-label">Trading P&L (U+R)</div>
+                            <div class="stat-value {('metric-positive' if trading_total >= 0 else 'metric-negative')}">{trading_total:+,.2f}</div>
+                            <div class="stat-subtext">Excludes interest & dividends</div>
+                        </div>
+                        <div class="stat-card">
+                            <div class="stat-label">Interest & Div Effect</div>
+                            <div class="stat-value {('metric-positive' if interest_effect >= 0 else 'metric-negative')}">{interest_effect:+,.2f}</div>
+                            <div class="stat-subtext">NAV change driven by cash</div>
+                        </div>
+                        <div class="stat-card">
+                            <div class="stat-label">30-Day Rolling Sharpe</div>
+                            <div class="stat-value {('metric-positive' if rolling_sharpe is not None and rolling_sharpe >= 0 else 'metric-negative')}">{rolling_sharpe:.2f if rolling_sharpe is not None else '—'}</div>
+                            <div class="stat-subtext">Risk-adjusted return (annualised)</div>
+                        </div>
+                        <div class="stat-card">
                             <div class="stat-label">Portfolio Heat</div>
                             <div class="stat-value">{portfolio_heat:.1f}%</div>
                             <div class="stat-subtext">Open risk vs capital</div>
@@ -292,6 +322,16 @@ async def dashboard():
                             </tbody>
                         </table>
                     </div>
+                </section>
+
+                <section class="panel">
+                    <div class="panel-header">
+                        <div>
+                            <h1>Recent Closed Trades</h1>
+                            <p>Last 10 outcomes (win/loss with return).</p>
+                        </div>
+                    </div>
+                    {recent_trades_html}
                 </section>
 
                 <div class="footer">
