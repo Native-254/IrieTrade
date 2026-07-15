@@ -70,6 +70,9 @@ async def dashboard():
             sharpe_series = (daily_returns.rolling(30).mean() / daily_returns.rolling(30).std()) * (252 ** 0.5)
             rolling_sharpe = sharpe_series.iloc[-1] if not sharpe_series.empty else None
 
+    # Format the rolling Sharpe value safely
+    sharpe_display = f"{rolling_sharpe:.2f}" if rolling_sharpe is not None else '—'
+
     # Plotly chart
     fig = make_subplots(rows=1, cols=1)
 
@@ -260,7 +263,7 @@ async def dashboard():
                         </div>
                         <div class="stat-card">
                             <div class="stat-label">30-Day Rolling Sharpe</div>
-                            <div class="stat-value {('metric-positive' if rolling_sharpe is not None and rolling_sharpe >= 0 else 'metric-negative')}">{rolling_sharpe:.2f if rolling_sharpe is not None else '—'}</div>
+                            <div class="stat-value {('metric-positive' if rolling_sharpe is not None and rolling_sharpe >= 0 else 'metric-negative')}">{sharpe_display}</div>
                             <div class="stat-subtext">Risk-adjusted return (annualised)</div>
                         </div>
                         <div class="stat-card">
