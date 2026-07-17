@@ -57,8 +57,19 @@ async def dashboard():
     daily_pct = (daily_change / df['nav'].iloc[-2]) * 100 if len(df) > 1 else 0
     current_capital = trading_engine.risk_manager.current_capital
     latest_prices = getattr(trading_engine, 'latest_prices', {}) or {}
-    unrealized_pnl = getattr(trading_engine, 'unrealized_pnl', 0.0)
-    realized_pnl = getattr(trading_engine, 'realized_pnl', 0.0)
+    
+    # Compute aggregate U-P&L from positions directly (accurate)
+    computed_unrealized = 0.0
+    if trading_engine.open_positions:
+        for pos in trading_engine.open_positions.values():
+            price = latest_prices.get(pos.symbol, pos.entry_price)
+            if pos.side == 'BUY':
+                computed_unrealized += (price - pos.entry_price) * pos.quantity
+            else:  # SELL (short)
+                computed_unrealized += (pos.entry_price - price) * pos.quantity
+    
+    unrealized_pnl = computed_unrealized
+    realized_pnl = getattr(trading_engine, 'realized_pnl', 0.0)  # will remain 0 until trades close
     trading_total = unrealized_pnl + realized_pnl
     interest_effect = (last_nav - first_nav) - trading_total
 

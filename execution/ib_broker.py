@@ -1,7 +1,7 @@
 # execution/ib_broker.py
 import time
 from ib_async import IB, Stock, MarketOrder, LimitOrder, StopOrder
-from typing import Dict, Any, Optional
+from typing import Dict, Any, Optional, Tuple
 from utils.config import CONFIG
 from utils.logger import log
 from execution.broker import Broker
@@ -13,7 +13,6 @@ class IBBroker(Broker):
         self.connected = False
 
     def connect(self):
-        """Connects to TWS or IB Gateway."""
         if self.connected:
             return
         try:
@@ -30,7 +29,6 @@ class IBBroker(Broker):
             raise
 
     def get_account_info(self) -> Dict[str, Any]:
-        """Fetches account summary."""
         if not self.connected:
             self.connect()
         account_values = self.ib.accountValues(self.config['account_id'])
@@ -42,16 +40,12 @@ class IBBroker(Broker):
             'unrealized_pnl': unrealized_pnl,
         }
 
-    def place_order(self, symbol: str, side: str, quantity: int, order_type: str = 'MKT', limit_price: Optional[float] = None, stop_price: Optional[float] = None) -> Dict[str, Any]:
-        """Places an order with IBKR."""
+    def place_order(self, symbol: str, side: str, quantity: int, order_type: str = 'MKT',
+                    limit_price: Optional[float] = None, stop_price: Optional[float] = None) -> Dict[str, Any]:
         if not self.connected:
             self.connect()
-
-        # Create a contract for US stocks
         contract = Stock(symbol, 'SMART', 'USD')
         self.ib.qualifyContracts(contract)
-
-        # Create order object
         if order_type.upper() == 'MKT':
             order = MarketOrder(side.upper(), quantity)
         elif order_type.upper() == 'LMT':
@@ -60,12 +54,8 @@ class IBBroker(Broker):
             order = LimitOrder(side.upper(), quantity, limit_price)
         else:
             raise ValueError(f"Unsupported order type: {order_type}")
-
-        # Place the order
         trade = self.ib.placeOrder(contract, order)
         log.info(f"Order placed: {side} {quantity} {symbol} @ {order_type}. ID: {trade.order.orderId}")
-
-        # Wait for order to be submitted
         self.ib.sleep(1)
         return {
             'order_id': trade.order.orderId,
@@ -75,88 +65,65 @@ class IBBroker(Broker):
         }
 
     def place_bracket_short(self, symbol: str, quantity: int, entry_price: float,
-                            stop_price: float, take_profit: float):
-        """Places a short (sell) parent market order with attached stop-loss and take-profit (bracket) orders."""
+                            stop_price: float, take_profit: float) -> Tuple[Optional[int], Optional[int]]:
         if not self.connected:
             self.connect()
-
         contract = Stock(symbol, 'SMART', 'USD')
         self.ib.qualifyContracts(contract)
-
-        # Parent order (sell short)
         parent = MarketOrder('SELL', quantity)
         parent.tif = 'DAY'
         parent.transmit = False
-
-        # Stop-loss order (buy to cover if price rises to stop_price)
         stop = StopOrder('BUY', quantity, stop_price)
         stop.tif = 'DAY'
         stop.transmit = False
-
-        # Take-profit order (buy to cover if price falls to take_profit)
         tp = LimitOrder('BUY', quantity, take_profit)
         tp.tif = 'DAY'
         tp.transmit = True
-
-        # Place orders: parent first (not transmitted), then child orders
         parent_trade = self.ib.placeOrder(contract, parent)
-        self.ib.placeOrder(contract, stop)
+        stop_trade = self.ib.placeOrder(contract, stop)
         self.ib.placeOrder(contract, tp)
-
-        # Allow a moment for IB to assign an orderId
         self.ib.sleep(1)
-
         parent_id = getattr(parent_trade.order, 'orderId', None)
-        log.info(f"Placed bracket short for {symbol}: parent_id={parent_id}")
-        return parent_id
+        stop_id = getattr(stop_trade.order, 'orderId', None)
+        log.info(f"Placed bracket short for {symbol}: parent_id={parent_id}, stop_id={stop_id}")
+        return parent_id, stop_id
 
     def place_bracket_long(self, symbol: str, quantity: int, entry_price: float,
-                           stop_price: float, take_profit: float) -> Optional[int]:
-        """Places a long (buy) parent market order with attached stop-loss and take-profit (bracket) orders."""
+                           stop_price: float, take_profit: float) -> Tuple[Optional[int], Optional[int]]:
         if not self.connected:
             self.connect()
-
         contract = Stock(symbol, 'SMART', 'USD')
         self.ib.qualifyContracts(contract)
-
         parent = MarketOrder('BUY', quantity)
         parent.tif = 'DAY'
         parent.transmit = False
-
         stop = StopOrder('SELL', quantity, stop_price)
         stop.tif = 'DAY'
         stop.transmit = False
-
         tp = LimitOrder('SELL', quantity, take_profit)
         tp.tif = 'DAY'
         tp.transmit = True
-
         parent_trade = self.ib.placeOrder(contract, parent)
-        self.ib.placeOrder(contract, stop)
+        stop_trade = self.ib.placeOrder(contract, stop)
         self.ib.placeOrder(contract, tp)
-
         self.ib.sleep(1)
-
         parent_id = getattr(parent_trade.order, 'orderId', None)
-        log.info(f"Placed bracket long for {symbol}: parent_id={parent_id}")
-        return parent_id
+        stop_id = getattr(stop_trade.order, 'orderId', None)
+        log.info(f"Placed bracket long for {symbol}: parent_id={parent_id}, stop_id={stop_id}")
+        return parent_id, stop_id
 
     def get_stop_order_id(self, parent_id: int) -> int:
-        """Return the stop-order child ID for a bracket parent."""
         for trade in self.ib.trades():
             if getattr(trade.order, 'parentId', None) == parent_id and getattr(trade.order, 'orderType', None) == 'STP':
                 return trade.order.orderId
         return 0
 
-    def update_stop_order(self, order_id: int, new_stop: float):
-        """Cancel old stop order and replace with a new one."""
+    def update_stop_order(self, order_id: int, new_stop: float) -> Optional[int]:
         if not self.connected:
             self.connect()
-
         for trade in self.ib.trades():
             if trade.order.orderId == order_id and trade.order.orderType == 'STP':
                 self.ib.cancelOrder(trade.order)
-
                 new_order = StopOrder(
                     trade.order.action,
                     trade.order.totalQuantity,
@@ -165,16 +132,13 @@ class IBBroker(Broker):
                 )
                 new_trade = self.ib.placeOrder(trade.contract, new_order)
                 self.ib.sleep(1)
-
                 new_order_id = getattr(new_trade.order, 'orderId', None)
                 log.info(f"Updated stop order {order_id} -> {new_order_id} at {new_stop}")
                 return new_order_id
-
         log.warning(f"Stop order {order_id} not found.")
         return None
 
     def cancel_order(self, order_id: str) -> bool:
-        """Cancels an order by ID."""
         if not self.connected:
             self.connect()
         for trade in self.ib.trades():
@@ -186,7 +150,6 @@ class IBBroker(Broker):
         return False
 
     def get_positions(self) -> list:
-        """Returns a list of current positions."""
         if not self.connected:
             self.connect()
         positions = []
@@ -200,7 +163,6 @@ class IBBroker(Broker):
         return positions
 
     def is_shortable(self, symbol: str, quantity: int) -> bool:
-        """Check if there are enough shares to short."""
         try:
             contract = Stock(symbol, 'SMART', 'USD')
             self.ib.qualifyContracts(contract)
@@ -218,7 +180,6 @@ class IBBroker(Broker):
             return False
 
     def wait_for_fill(self, order_id: int, timeout: int = 30) -> dict:
-        """Wait for an order to fill and return fill details."""
         start = time.time()
         while time.time() - start < timeout:
             for trade in self.ib.trades():
@@ -236,7 +197,6 @@ class IBBroker(Broker):
         return {'filled': 0, 'status': 'Timeout'}
 
     def disconnect(self):
-        """Cleanly disconnect."""
         if self.connected:
             self.ib.disconnect()
             self.connected = False

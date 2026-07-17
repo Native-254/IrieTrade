@@ -40,7 +40,7 @@ class TradingEngine:
         self.risk_manager = risk_manager or RiskManager(initial_capital, position_manager=self.position_manager)
 
         self.trade_results: List[Tuple[str, float]] = []
-        self.open_positions = self.position_manager.positions  # alias for backward compatibility
+        self.open_positions = self.position_manager.positions
 
         self.trailing_stop_percent = 0.02
         self.equity_history: List[Tuple[datetime, float]] = []
@@ -49,7 +49,6 @@ class TradingEngine:
         self.unrealized_pnl: float = 0.0
         self.realized_pnl: float = 0.0
 
-        # Load strategies (intraday params)
         intraday_params = self.config['strategies']['parameters'].get('intraday', {})
         self.strategies = []
         for strat_config in self.config['strategies']['active']:
@@ -73,7 +72,6 @@ class TradingEngine:
         log.success("Trading Engine initialized.")
 
     def _apply_slippage(self, price: float, action: str) -> float:
-        """Return a slightly worse price to simulate slippage."""
         if not self.config['execution'].get('simulate_slippage', False):
             return price
         slippage = self.config['execution'].get('slippage_percent', 0.0005)
@@ -83,7 +81,6 @@ class TradingEngine:
             return price * (1 - slippage)
 
     def _calculate_commission(self, quantity: int, price: float) -> float:
-        """IBKR US stock commission: $0.005/share, min $1, max 1% of trade value."""
         if not self.config['execution'].get('simulate_commissions', False):
             return 0.0
         trade_value = quantity * price
@@ -93,7 +90,6 @@ class TradingEngine:
         return max(minimum, min(per_share, maximum))
 
     def _simulate_partial_fill(self, requested_qty: int) -> int:
-        """Randomly fill only a portion of the order to simulate partial fills."""
         if not self.config['execution'].get('simulate_partial_fills', False):
             return requested_qty
         ratio = np.random.uniform(
@@ -104,13 +100,11 @@ class TradingEngine:
         return max(1, filled)
 
     def _check_shortable(self, symbol: str, quantity: int) -> bool:
-        """Verify the stock can be shorted with enough shares."""
         if not self.config['execution'].get('short_availability_check', False):
             return True
         return self.broker.is_shortable(symbol, quantity)
 
     def _earnings_nearby(self, symbol: str) -> bool:
-        """Return True if the next earnings date is within the avoidance window."""
         if not self.config['execution'].get('earnings_avoidance', False):
             return False
         try:
@@ -126,11 +120,9 @@ class TradingEngine:
 
     def _check_net_exposure(self, action: str, symbol: str, quantity: int,
                             last_price: float, latest_prices: dict) -> bool:
-        """Return False if the new trade would breach max net exposure."""
         max_net = self.config['risk_management'].get('max_net_exposure', 1.0)
         if max_net >= 999:
             return True
-
         notional = quantity * last_price
         if action == 'BUY':
             delta_long = notional
@@ -140,10 +132,8 @@ class TradingEngine:
             delta_short = notional
         else:
             return True
-
         current_net = self.risk_manager.get_net_exposure(latest_prices)
         new_net = current_net + delta_long - delta_short
-
         if abs(new_net) > max_net * self.risk_manager.current_capital:
             log.warning(f"Net exposure {new_net:.2f} would exceed limit {max_net*self.risk_manager.current_capital:.2f}")
             return False
@@ -166,16 +156,13 @@ class TradingEngine:
         return float(safe_kelly)
 
     def _sync_positions_from_broker(self):
-        """Reconcile internal positions with IBKR's reported positions."""
         try:
             ib_positions = self.broker.get_positions()
             symbols_in_ib = {p['symbol'] for p in ib_positions}
-            # Remove stale internal positions
             for sym in list(self.position_manager.positions.keys()):
                 if sym not in symbols_in_ib:
                     self.position_manager.close_position(sym)
                     log.warning(f"Removed stale position for {sym}")
-            # Add/update positions from IB
             for ib_pos in ib_positions:
                 sym = ib_pos['symbol']
                 qty = ib_pos['quantity']
@@ -194,20 +181,12 @@ class TradingEngine:
                     pos = self.position_manager.positions[sym]
                     pos.quantity = abs(qty)
                     pos.entry_price = avg_cost
-                    # Preserve existing stop configuration across syncs.
-                    if pos.stop_loss == 0.0 and getattr(pos, 'stop_order_id', 0) == 0:
-                        pos.stop_loss = 0.0
         except Exception as e:
             log.error(f"Failed to sync positions: {e}")
 
     def _place_trade(self, symbol: str, action: str, quantity: int,
                  last_price: float, stop_loss: float,
                  atr: float, vol_stop_mult: float) -> bool:
-        """
-        Place a trade with realistic slippage, commissions, partial fills,
-        short-availability checks, and bracket orders. Returns True if at least
-        one share was filled.
-        """
         if self._earnings_nearby(symbol):
             self.email.send_error_alert(
                 f"Trade skipped for {symbol}: earnings within {self.config['execution']['earnings_avoidance_days']} days."
@@ -232,11 +211,11 @@ class TradingEngine:
             try:
                 self.broker.connect()
                 if action == 'BUY':
-                    order_id = self.broker.place_bracket_long(
+                    order_id, stop_id = self.broker.place_bracket_long(
                         symbol, filled_qty, slipped_price, stop_loss, tp_price
                     )
                 else:
-                    order_id = self.broker.place_bracket_short(
+                    order_id, stop_id = self.broker.place_bracket_short(
                         symbol, filled_qty, slipped_price, stop_loss, tp_price
                     )
                 if not order_id:
@@ -256,15 +235,16 @@ class TradingEngine:
                 commission = self._calculate_commission(filled_qty, avg_price)
                 net_entry_price = avg_price + (commission / filled_qty) if action == 'BUY' else avg_price - (commission / filled_qty)
 
-                self.broker.ib.sleep(1)
-                stop_id = self.broker.get_stop_order_id(order_id)
+                # Ensure stop_id is an integer, default 0 if None
+                safe_stop_id = stop_id if stop_id is not None else 0
+
                 self.position_manager.open_position(Position(
                     symbol=symbol,
                     side='BUY' if action == 'BUY' else 'SELL',
                     quantity=filled_qty,
                     entry_price=net_entry_price,
                     stop_loss=stop_loss,
-                    stop_order_id=stop_id,
+                    stop_order_id=safe_stop_id,
                     entry_time=datetime.now()
                 ))
 
@@ -336,7 +316,6 @@ class TradingEngine:
     def run_iteration(self):
         log.info(f"--- Running iteration at {datetime.now()} ---")
 
-        # 1. Update risk manager with current capital and broker P&L details
         account_info = self.broker.get_account_info()
         self.last_account_info = account_info
         current_capital = account_info['net_liquidation']
@@ -349,10 +328,8 @@ class TradingEngine:
             log.warning("Trading halted by risk manager.")
             return
 
-        # 2. Sync positions from broker
         self._sync_positions_from_broker()
 
-        # 3. Trailing stops & collect latest prices
         latest_prices = {}
         for sym, pos in self.position_manager.positions.items():
             df = self.data_manager.get_data(sym,
@@ -364,7 +341,6 @@ class TradingEngine:
             last_price = df['close'].iloc[-1]
             latest_prices[sym] = last_price
 
-            # Update trailing stop
             if pos.side == 'BUY':
                 new_stop = max(pos.stop_loss, last_price * (1 - self.trailing_stop_percent))
             else:
@@ -379,19 +355,14 @@ class TradingEngine:
                 else:
                     log.warning(f"No stop order ID for {sym}, can't update at broker.")
 
-            # Check if stop triggered (broker will execute, but we monitor)
             if (pos.side == 'BUY' and last_price <= pos.stop_loss) or \
                (pos.side == 'SELL' and last_price >= pos.stop_loss):
                 log.warning(f"Stop-loss triggered for {sym}. Broker will close.")
 
         self.latest_prices = latest_prices
-
-        # Recalculate open risk with latest prices
         self.risk_manager.recalc_open_risk(latest_prices)
 
-        # 4. Iterate over symbols for new signals
         for symbol in self.symbols_to_trade:
-            # Skip if already in a position
             if symbol in self.position_manager.positions:
                 continue
 
@@ -404,7 +375,6 @@ class TradingEngine:
             last_price = df['close'].iloc[-1]
             latest_prices[symbol] = last_price
 
-            # Signal collection & resolution
             signals_to_resolve = []
             for strategy in self.strategies:
                 raw = strategy.generate_signals(df).iloc[-1]
@@ -415,7 +385,7 @@ class TradingEngine:
                         raw = Signal.HOLD
                 signals_to_resolve.append(raw)
 
-            current_side = None  # we already skip if in position, so always None
+            current_side = None
             enter_long = Signal.ENTER_LONG in signals_to_resolve
             exit_long = Signal.EXIT_LONG in signals_to_resolve
             enter_short = Signal.ENTER_SHORT in signals_to_resolve
@@ -438,7 +408,6 @@ class TradingEngine:
             if action is None:
                 continue
 
-            # Log resolved signals
             reasons = []
             if enter_long:
                 reasons.append('ENTER_LONG')
@@ -450,7 +419,6 @@ class TradingEngine:
                 reasons.append('EXIT_SHORT')
             log.info(f"Resolved {symbol}: {reasons} → {action} (current side: {current_side})")
 
-            # Calculate ATR
             atr = (df['high'] - df['low']).rolling(14).mean().iloc[-1]
             vol_stop_mult = self.config['risk_management']['volatility_stop_multiplier']
 
@@ -471,13 +439,11 @@ class TradingEngine:
                     stop_loss_price=stop_loss
                 )
             else:
-                # Closing trades are not handled here (only entries)
                 continue
 
             if quantity == 0:
                 continue
 
-            # 4. Gross exposure check (new entries only)
             proposed_notional = quantity * last_price
             current_gross = self.risk_manager.get_gross_exposure(latest_prices)
             new_gross = current_gross + proposed_notional
@@ -491,7 +457,6 @@ class TradingEngine:
                 )
                 continue
 
-            # 5. Single-name position limit
             max_single = current_capital * self.config['risk_management'].get('max_position_pct', 0.2)
             existing_notional = self.risk_manager.get_position_notional(symbol, last_price)
             new_single = existing_notional + proposed_notional
@@ -511,7 +476,6 @@ class TradingEngine:
                 log.warning(f"Order rejected for {symbol}: {msg}")
                 continue
 
-            # Net exposure check
             if not self._check_net_exposure(action, symbol, quantity, last_price, latest_prices):
                 log.warning(f"Order rejected for {symbol} due to net exposure limit.")
                 self.email.send_error_alert(
@@ -519,7 +483,6 @@ class TradingEngine:
                 )
                 continue
 
-            # Earnings avoidance
             if self._earnings_nearby(symbol):
                 log.warning(f"Earnings nearby for {symbol}, skipping trade.")
                 self.email.send_error_alert(
@@ -527,7 +490,6 @@ class TradingEngine:
                 )
                 continue
 
-            # Execute trade (always send to broker, even in paper mode)
             success = self._place_trade(symbol, action, quantity, last_price,
                                         stop_loss, atr, vol_stop_mult)
             if success:
@@ -535,7 +497,6 @@ class TradingEngine:
                 self.telegram.send_trade_alert(symbol, action, quantity, last_price)
                 self.discord.send_trade_alert(symbol, action, quantity, last_price)
 
-        # Record NAV and latest market prices for dashboard
         self.equity_history.append((datetime.now(), current_capital))
         self.latest_prices = latest_prices
 
