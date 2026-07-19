@@ -5,3 +5,4 @@ logs/
 data/raw/
 .env
 config/settings.yaml
+.qodo

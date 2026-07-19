@@ -1,4 +1,6 @@
 # live/engine.py
+import csv
+import os
 import time
 import schedule
 import threading
@@ -12,11 +14,14 @@ from utils.config import CONFIG
 from utils.logger import log
 from data.manager import DataManager
 from strategies.trend_following import TrendFollowingLS
+from strategies.trend_following_long_only import TrendFollowingLongOnly
 from strategies.mean_revisions import MeanReversion
 from strategies.signals import Signal
+
 from risk.manager import RiskManager
 from risk.position_manager import PositionManager, Position
 from execution.ib_broker import IBBroker
+from execution.binance_broker import BinanceBroker
 from monitoring.telegram_alerter import TelegramAlerter
 from monitoring.discord_alerter import DiscordAlerter
 from monitoring.email_alerter import EmailAlerter
@@ -30,7 +35,18 @@ class TradingEngine:
         log.info("Initializing Trading Engine...")
         self.config = config if config is not None else CONFIG
         self.data_manager = data_manager or DataManager()
-        self.broker = broker or IBBroker()
+
+        # ---------- BROKER SELECTION ----------
+        platform = self.config['trading']['platform']
+        if broker:
+            self.broker = broker
+        elif platform == 'ib':
+            self.broker = IBBroker()
+        elif platform == 'binance':
+            self.broker = BinanceBroker(self.config['exchanges']['binance'])
+        else:
+            raise ValueError(f"Unknown trading platform: {platform}")
+
         self.telegram = telegram or TelegramAlerter()
         self.discord = discord or DiscordAlerter()
         self.email = email or EmailAlerter()
@@ -49,6 +65,9 @@ class TradingEngine:
         self.unrealized_pnl: float = 0.0
         self.realized_pnl: float = 0.0
 
+        # ---------- DYNAMIC SYMBOLS ----------
+        self.symbols_to_trade = self.config['trading']['symbols']
+
         intraday_params = self.config['strategies']['parameters'].get('intraday', {})
         self.strategies = []
         for strat_config in self.config['strategies']['active']:
@@ -56,10 +75,16 @@ class TradingEngine:
                 continue
             name = strat_config['name']
             params_key = name.lower().replace(' ', '_')
+
+            if name == 'TrendFollowingLongOnly':
+                params_key = 'trend_following_long_only'
+
             params = intraday_params.get(params_key,
                                          self.config['strategies']['parameters'].get(params_key, {}))
             if name in ('TrendFollowing', 'TrendFollowingLS'):
                 self.strategies.append(TrendFollowingLS(params))
+            elif name == 'TrendFollowingLongOnly':
+                self.strategies.append(TrendFollowingLongOnly(params))
             elif name == 'MeanReversion':
                 self.strategies.append(MeanReversion(params))
             elif name == 'Breakout':
@@ -67,10 +92,11 @@ class TradingEngine:
             else:
                 log.warning(f"Unknown strategy '{name}' in config. Skipping.")
 
-        self.symbols_to_trade = ['AAPL', 'MSFT', 'GOOGL', 'TSLA', 'NVDA', 'AMZN', 'META', 'JPM', 'V', 'MA', 'PG', 'DIS', 'HD', 'BAC', 'VZ', 'ADBE', 'CMCSA', 'NFLX', 'INTC', 'CSCO', 'PFE', 'MRK', 'KO', 'PEP', 'WMT', 'CVX', 'XOM', 'T', 'UNH', 'COST', 'ORCL', 'ABT', 'CRM', 'NKE', 'MCD', 'IBM', 'LLY', 'MDT', 'BMY', 'AMGN', 'SBUX', 'QCOM', 'TXN', 'GILD', 'FISV', 'INTU', 'GE', 'BA', 'CAT', 'MMM', 'AXP', 'SPGI', 'DE', 'DUK', 'SO', 'NEE', 'EXC', 'AEP', 'ED', 'D', 'EIX', 'PEG', 'SRE', 'WEC', 'ES', 'CMS','VTI', 'QQQM', 'SMH', 'FDVV', 'FTEC', 'VWO', 'VOO', 'SCHM', 'QQQ', 'SCHA', 'SCHD', 'VGT']
         self.is_running = False
+        self._last_logged_qty: dict[str, int] = {}
         log.success("Trading Engine initialized.")
 
+    # ---------- HELPER METHODS ----------
     def _apply_slippage(self, price: float, action: str) -> float:
         if not self.config['execution'].get('simulate_slippage', False):
             return price
@@ -88,6 +114,26 @@ class TradingEngine:
         minimum = self.config['execution']['commission_min']
         maximum = trade_value * self.config['execution']['commission_max_pct']
         return max(minimum, min(per_share, maximum))
+
+    def _log_trade(self, symbol, action, quantity, entry_price, exit_price, pnl, side, strategy_name=''):
+        filepath = 'logs/trades.csv'
+        headers = ['timestamp','symbol','action','quantity','entry_price','exit_price','pnl','side','strategy']
+        write_header = not os.path.exists(filepath)
+        with open(filepath, 'a', newline='') as f:
+            writer = csv.DictWriter(f, fieldnames=headers)
+            if write_header:
+                writer.writeheader()
+            writer.writerow({
+                'timestamp': datetime.now().isoformat(),
+                'symbol': symbol,
+                'action': action,
+                'quantity': quantity,
+                'entry_price': entry_price,
+                'exit_price': exit_price,
+                'pnl': pnl,
+                'side': side,
+                'strategy': strategy_name
+            })
 
     def _simulate_partial_fill(self, requested_qty: int) -> int:
         if not self.config['execution'].get('simulate_partial_fills', False):
@@ -156,6 +202,8 @@ class TradingEngine:
         return float(safe_kelly)
 
     def _sync_positions_from_broker(self):
+        if self.config['trading']['platform'] != 'ib':
+            return
         try:
             ib_positions = self.broker.get_positions()
             symbols_in_ib = {p['symbol'] for p in ib_positions}
@@ -184,6 +232,7 @@ class TradingEngine:
         except Exception as e:
             log.error(f"Failed to sync positions: {e}")
 
+    # ---------- _place_trade ----------
     def _place_trade(self, symbol: str, action: str, quantity: int,
                  last_price: float, stop_loss: float,
                  atr: float, vol_stop_mult: float) -> bool:
@@ -200,65 +249,115 @@ class TradingEngine:
 
         slipped_price = self._apply_slippage(last_price, action)
 
+        # ---------- ENTRY ----------
         if action in ('BUY', 'SELL_SHORT'):
             filled_qty = self._simulate_partial_fill(quantity)
             if filled_qty <= 0:
                 return False
 
-            stop_loss = self._apply_slippage(stop_loss, 'SELL' if action == 'BUY' else 'BUY_TO_COVER')
-            tp_price = slipped_price + (atr * vol_stop_mult * 2) if action == 'BUY' else slipped_price - (atr * vol_stop_mult * 2)
+            use_bracket = getattr(self.broker, 'supports_bracket', True)
 
-            try:
-                self.broker.connect()
-                if action == 'BUY':
-                    order_id, stop_id = self.broker.place_bracket_long(
-                        symbol, filled_qty, slipped_price, stop_loss, tp_price
-                    )
-                else:
-                    order_id, stop_id = self.broker.place_bracket_short(
-                        symbol, filled_qty, slipped_price, stop_loss, tp_price
-                    )
-                if not order_id:
-                    log.error(f"Failed to place bracket order for {symbol}")
-                    self.email.send_error_alert(f"Trade failed for {symbol}: bracket order rejected")
+            if use_bracket:
+                stop_loss_slipped = self._apply_slippage(stop_loss, 'SELL' if action == 'BUY' else 'BUY_TO_COVER')
+                tp_price = slipped_price + (atr * vol_stop_mult * 2) if action == 'BUY' else slipped_price - (atr * vol_stop_mult * 2)
+                try:
+                    self.broker.connect()
+                    if action == 'BUY':
+                        order_id, stop_id = self.broker.place_bracket_long(
+                            symbol, filled_qty, slipped_price, stop_loss_slipped, tp_price
+                        )
+                    else:
+                        order_id, stop_id = self.broker.place_bracket_short(
+                            symbol, filled_qty, slipped_price, stop_loss_slipped, tp_price
+                        )
+                    if not order_id:
+                        log.error(f"Failed to place bracket order for {symbol}")
+                        self.email.send_error_alert(f"Trade failed for {symbol}: bracket order rejected")
+                        return False
+
+                    fill = self.broker.wait_for_fill(order_id)
+                    if fill['status'] != 'Filled' or fill['filled'] == 0:
+                        log.error(f"Order not filled for {symbol}: {fill['status']}")
+                        self.email.send_error_alert(f"Trade failed for {symbol}: order not filled ({fill['status']})")
+                        return False
+
+                    filled_qty = fill['filled']
+                    avg_price = fill['avg_price']
+
+                    commission = self._calculate_commission(filled_qty, avg_price)
+                    net_entry_price = avg_price + (commission / filled_qty) if action == 'BUY' else avg_price - (commission / filled_qty)
+
+                    safe_stop_id = stop_id if stop_id is not None else 0
+
+                    self.position_manager.open_position(Position(
+                        symbol=symbol,
+                        side='BUY' if action == 'BUY' else 'SELL',
+                        quantity=filled_qty,
+                        entry_price=net_entry_price,
+                        stop_loss=stop_loss_slipped,
+                        stop_order_id=safe_stop_id,
+                        entry_time=datetime.now()
+                    ))
+
+                    self.email.send_trade_alert(symbol, action, filled_qty, avg_price)
+                    log.success(f"Filled {action} {filled_qty} {symbol} @ ${avg_price:.2f} (bracket)")
+                    return True
+
+                except NotImplementedError:
+                    log.warning("Bracket orders not supported, falling back to plain order")
+                    use_bracket = False
+                except Exception as e:
+                    log.exception(f"Entry execution error for {symbol}: {e}")
+                    self.email.send_error_alert(f"Trade failed for {symbol}: {e}")
                     return False
+                finally:
+                    self.broker.disconnect()
 
-                fill = self.broker.wait_for_fill(order_id)
-                if fill['status'] != 'Filled' or fill['filled'] == 0:
-                    log.error(f"Order not filled for {symbol}: {fill['status']}")
-                    self.email.send_error_alert(f"Trade failed for {symbol}: order not filled ({fill['status']})")
+            # Plain market order (Binance, etc.)
+            if not use_bracket:
+                try:
+                    self.broker.connect()
+                    order_result = self.broker.place_order(
+                        symbol=symbol, side=action, quantity=filled_qty, order_type='MKT'
+                    )
+                    if not order_result or order_result['status'] not in ('Filled', 'closed'):
+                        log.error(f"Plain order failed for {symbol}")
+                        self.email.send_error_alert(f"Trade failed for {symbol}: plain order rejected")
+                        return False
+
+                    fill = self.broker.wait_for_fill(order_result['order_id'])
+                    if fill['status'] != 'Filled' or fill['filled'] == 0:
+                        log.error(f"Plain order not filled for {symbol}")
+                        return False
+
+                    filled_qty = fill['filled']
+                    avg_price = fill['avg_price']
+
+                    commission = self._calculate_commission(filled_qty, avg_price)
+                    net_entry_price = avg_price + (commission/filled_qty) if action == 'BUY' else avg_price - (commission/filled_qty)
+
+                    self.position_manager.open_position(Position(
+                        symbol=symbol,
+                        side='BUY' if action == 'BUY' else 'SELL',
+                        quantity=filled_qty,
+                        entry_price=net_entry_price,
+                        stop_loss=stop_loss,
+                        stop_order_id=0,
+                        entry_time=datetime.now()
+                    ))
+
+                    self.email.send_trade_alert(symbol, action, filled_qty, avg_price)
+                    log.success(f"Filled {action} {filled_qty} {symbol} @ ${avg_price:.2f} (plain)")
+                    return True
+
+                except Exception as e:
+                    log.exception(f"Entry error for {symbol}: {e}")
+                    self.email.send_error_alert(f"Trade failed for {symbol}: {e}")
                     return False
+                finally:
+                    self.broker.disconnect()
 
-                filled_qty = fill['filled']
-                avg_price = fill['avg_price']
-
-                commission = self._calculate_commission(filled_qty, avg_price)
-                net_entry_price = avg_price + (commission / filled_qty) if action == 'BUY' else avg_price - (commission / filled_qty)
-
-                # Ensure stop_id is an integer, default 0 if None
-                safe_stop_id = stop_id if stop_id is not None else 0
-
-                self.position_manager.open_position(Position(
-                    symbol=symbol,
-                    side='BUY' if action == 'BUY' else 'SELL',
-                    quantity=filled_qty,
-                    entry_price=net_entry_price,
-                    stop_loss=stop_loss,
-                    stop_order_id=safe_stop_id,
-                    entry_time=datetime.now()
-                ))
-
-                self.email.send_trade_alert(symbol, action, filled_qty, avg_price)
-                log.success(f"Filled {action} {filled_qty} {symbol} @ ${avg_price:.2f} (slipped from {last_price:.2f}, net cost {net_entry_price:.2f})")
-                return True
-
-            except Exception as e:
-                log.exception(f"Entry execution error for {symbol}: {e}")
-                self.email.send_error_alert(f"Trade failed for {symbol}: {e}")
-                return False
-            finally:
-                self.broker.disconnect()
-
+        # ---------- EXIT ----------
         else:
             pos = self.position_manager.positions.get(symbol)
             if not pos:
@@ -297,6 +396,9 @@ class TradingEngine:
                            else (pos.entry_price - net_close_price) / pos.entry_price
                 self.trade_results.append(('win' if pnl_frac > 0 else 'loss', pnl_frac))
 
+                pnl_dollar = (net_close_price - pos.entry_price) * filled_qty if pos.side == 'BUY' else (pos.entry_price - net_close_price) * filled_qty
+                self._log_trade(symbol, action, filled_qty, pos.entry_price, net_close_price, pnl_dollar, pos.side)
+
                 if filled_qty >= pos.quantity:
                     self.position_manager.close_position(symbol)
                 else:
@@ -313,6 +415,52 @@ class TradingEngine:
             finally:
                 self.broker.disconnect()
 
+        # Fallback – should never be reached, satisfies type checker
+        return False
+
+    # ---------- RECONCILIATION ----------
+    def _reconcile_and_log_closed_positions(self, latest_prices: dict) -> None:
+        try:
+            for sym, last_qty in list(self._last_logged_qty.items()):
+                if last_qty <= 0:
+                    continue
+                pos = self.position_manager.positions.get(sym)
+                current_qty = pos.quantity if pos else 0
+                if current_qty == last_qty:
+                    continue
+                exit_qty = last_qty - current_qty
+                if exit_qty <= 0:
+                    continue
+                exit_price = latest_prices.get(sym)
+                if exit_price is None:
+                    self._last_logged_qty[sym] = current_qty
+                    continue
+                if not pos:
+                    self._last_logged_qty[sym] = current_qty
+                    continue
+                pnl_dollar = (
+                    (exit_price - pos.entry_price) * exit_qty
+                    if pos.side == 'BUY'
+                    else (pos.entry_price - exit_price) * exit_qty
+                )
+                action = 'SELL' if pos.side == 'BUY' else 'BUY_TO_COVER'
+                self._log_trade(
+                    symbol=sym,
+                    action=action,
+                    quantity=exit_qty,
+                    entry_price=pos.entry_price,
+                    exit_price=exit_price,
+                    pnl=pnl_dollar,
+                    side=pos.side,
+                    strategy_name='',
+                )
+                self._last_logged_qty[sym] = current_qty
+            for sym, pos in self.position_manager.positions.items():
+                self._last_logged_qty[sym] = pos.quantity
+        except Exception as e:
+            log.exception(f"Failed to reconcile/log closed positions: {e}")
+
+    # ---------- MAIN LOOP ----------
     def run_iteration(self):
         log.info(f"--- Running iteration at {datetime.now()} ---")
 
@@ -330,7 +478,11 @@ class TradingEngine:
 
         self._sync_positions_from_broker()
 
+        for sym, pos in self.position_manager.positions.items():
+            self._last_logged_qty[sym] = pos.quantity
+
         latest_prices = {}
+
         for sym, pos in self.position_manager.positions.items():
             df = self.data_manager.get_data(sym,
                                             start_date=(datetime.now() - timedelta(days=1)).strftime('%Y-%m-%d'),
@@ -358,6 +510,8 @@ class TradingEngine:
             if (pos.side == 'BUY' and last_price <= pos.stop_loss) or \
                (pos.side == 'SELL' and last_price >= pos.stop_loss):
                 log.warning(f"Stop-loss triggered for {sym}. Broker will close.")
+
+        self._reconcile_and_log_closed_positions(latest_prices)
 
         self.latest_prices = latest_prices
         self.risk_manager.recalc_open_risk(latest_prices)

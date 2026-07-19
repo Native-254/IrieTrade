@@ -1,10 +1,10 @@
 # monitoring/api.py
-from fastapi import FastAPI
+from fastapi import FastAPI, Query
 from fastapi.responses import HTMLResponse
 import plotly.graph_objects as go
 from plotly.subplots import make_subplots
 import pandas as pd
-from datetime import datetime
+from datetime import datetime, timedelta
 import uvicorn
 from utils.config import CONFIG
 from utils.logger import log
@@ -36,6 +36,55 @@ async def account_info():
     except Exception:
         return {"status": "error", "message": "Internal error"}
 
+# ------------------ NEW API ENDPOINTS ------------------
+@app.get("/api/signals")
+async def api_signals(symbol: str = Query(..., description="Ticker symbol")):
+    if not trading_engine:
+        return {"error": "Engine not running"}
+    # Fetch recent data for the symbol
+    df = trading_engine.data_manager.get_data(
+        symbol,
+        start_date=(datetime.now() - timedelta(days=7)).strftime('%Y-%m-%d'),
+        end_date=datetime.now().strftime('%Y-%m-%d'),
+        interval="15m", force_refresh=True)
+    if df.empty:
+        return {"error": "No data"}
+    signals = []
+    for strat in trading_engine.strategies:
+        raw = strat.generate_signals(df).iloc[-1]
+        signals.append(str(raw))
+    return {"symbol": symbol, "signals": signals, "last_price": float(df['close'].iloc[-1])}
+
+@app.get("/api/positions")
+async def api_positions():
+    if not trading_engine:
+        return {"error": "Engine not running"}
+    positions = []
+    for pos in trading_engine.position_manager.positions.values():
+        positions.append({
+            'symbol': pos.symbol,
+            'side': pos.side,
+            'quantity': pos.quantity,
+            'entry_price': pos.entry_price,
+            'stop_loss': pos.stop_loss,
+        })
+    return {"positions": positions}
+
+@app.get("/api/performance")
+async def api_performance():
+    if not trading_engine:
+        return {"error": "Engine not running"}
+    nav = trading_engine.risk_manager.current_capital
+    daily_pnl = trading_engine.risk_manager.daily_pnl
+    open_risk = trading_engine.risk_manager.open_risk
+    return {
+        "nav": nav,
+        "daily_pnl": daily_pnl,
+        "open_risk": open_risk,
+        "open_positions": len(trading_engine.position_manager.positions),
+    }
+
+# ------------------ DASHBOARD (unchanged) ------------------
 @app.get("/dashboard", response_class=HTMLResponse)
 async def dashboard():
     if not trading_engine:
@@ -142,13 +191,15 @@ async def dashboard():
             else:
                 pnl = (pos.entry_price - current_price) * pos.quantity
             pnl_class = 'metric-positive' if pnl >= 0 else 'metric-negative'
+            stop_display = f"${pos.stop_loss:,.2f}" if pos.stop_loss else "—"
             position_rows += f"""
+
                 <tr>
                     <td>{pos.symbol}</td>
                     <td>{pos.side}</td>
                     <td>{pos.quantity}</td>
                     <td>${pos.entry_price:,.2f}</td>
-                    <td>${pos.stop_loss:,.2f}</td>
+                    <td>{stop_display}</td>
                     <td>${current_price:,.2f}</td>
                     <td class=\"{pnl_class}\">{pnl:+,.2f}</td>
                 </tr>

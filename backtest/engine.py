@@ -1,274 +1,171 @@
 # backtest/engine.py
-import vectorbt as vbt
 import pandas as pd
 import numpy as np
-from typing import Dict, Any, List, Tuple
+from typing import List, Dict, Optional
 from dataclasses import dataclass
-from utils.logger import log
 from data.manager import DataManager
-from strategies.trend_following import TrendFollowingLS
-from strategies.mean_revisions import MeanReversion
-
-
-def _to_stats_dict(stats: Any) -> Dict[str, Any]:
-    if stats is None:
-        return {}
-    if isinstance(stats, pd.Series):
-        return {str(k): v for k, v in stats.to_dict().items()}
-    try:
-        return {str(k): v for k, v in dict(stats).items()}
-    except Exception:
-        return {}
-
+from strategies.signals import Signal
 
 @dataclass
-class Position:
-    """Simulated trading position."""
+class BacktestPosition:
     symbol: str
-    side: str  # 'BUY' or 'SELL'
+    side: str
     quantity: int
     entry_price: float
-    entry_date: pd.Timestamp
-
-class PositionManager:
-    """Manages open positions during backtest."""
-    
-    def __init__(self):
-        self.positions: Dict[str, Position] = {}
-    
-    def open_position(self, symbol: str, side: str, quantity: int, entry_price: float, entry_date: pd.Timestamp):
-        """Open a new position."""
-        if symbol in self.positions:
-            self.close_position(symbol, entry_price, entry_date)
-        self.positions[symbol] = Position(symbol, side, quantity, entry_price, entry_date)
-    
-    def close_position(self, symbol: str, exit_price: float, exit_date: pd.Timestamp) -> Tuple[float, float]:
-        """Close a position and return (pnl, pnl_percent)."""
-        if symbol not in self.positions:
-            return 0.0, 0.0
-        pos = self.positions[symbol]
-        if pos.side == 'BUY':
-            pnl = (exit_price - pos.entry_price) * pos.quantity
-            pnl_pct = (exit_price - pos.entry_price) / pos.entry_price
-        else:  # SELL
-            pnl = (pos.entry_price - exit_price) * pos.quantity
-            pnl_pct = (pos.entry_price - exit_price) / pos.entry_price
-        del self.positions[symbol]
-        return pnl, pnl_pct
-    
-    def get_open_count(self) -> int:
-        return len(self.positions)
+    stop_loss: float
+    take_profit: Optional[float] = None
 
 class BacktestEngine:
-    def __init__(self, initial_capital: float = 100000.0, commission: float = 0.001):
-        self.initial_capital = initial_capital
-        self.commission = commission
-        self.data_manager = DataManager()
+    def __init__(self, config: dict, strategies: List):
+        self.config = config
+        self.strategies = strategies
+        exec_cfg = config['execution']
+        self.slippage = exec_cfg.get('slippage_percent', 0.0005)
+        self.comm_per_share = exec_cfg['commission_per_share']
+        self.comm_min = exec_cfg['commission_min']
+        self.comm_max_pct = exec_cfg['commission_max_pct']
+        self.partial_fill = exec_cfg.get('simulate_partial_fills', False)
+        self.partial_min = exec_cfg.get('partial_fill_min_ratio', 0.8)
+        risk_cfg = config['risk_management']
+        self.vol_stop_mult = risk_cfg['volatility_stop_multiplier']
+        self.risk_per_trade = risk_cfg['max_capital_per_trade']
 
-    def run_backtest(self, strategy_name: str, symbol: str, start_date: str, end_date: str, strategy_params: dict) -> Dict[str, Any]:
-        """Runs a backtest for a single strategy and returns metrics."""
-        log.info(f"Running backtest for {strategy_name} on {symbol} from {start_date} to {end_date}")
-
-        # 1. Fetch Data
-        data = self.data_manager.get_data(symbol, start_date, end_date, interval="1d")
-        if data.empty:
-            log.error("Backtest aborted: No data available.")
-            return {}
-
-        # 2. Instantiate Strategy and Generate Signals
-        if strategy_name == 'TrendFollowing':
-            strategy = TrendFollowingLS(strategy_params)
-        elif strategy_name == 'MeanReversion':
-            strategy = MeanReversion(strategy_params)
+    def _apply_slippage(self, price: float, action: str) -> float:
+        if action in ('BUY', 'BUY_TO_COVER'):
+            return price * (1 + self.slippage)
         else:
-            log.error(f"Strategy '{strategy_name}' not found.")
-            return {}
+            return price * (1 - self.slippage)
 
-        signals_series = strategy.generate_signals(data)
+    def _commission(self, qty: int, price: float) -> float:
+        trade_value = qty * price
+        per_share = qty * self.comm_per_share
+        return max(self.comm_min, min(per_share, trade_value * self.comm_max_pct))
 
-        # Convert signals to BUY/SELL format
-        entries = signals_series.isin(['BUY', 'ENTER_LONG'])
-        exits = signals_series.isin(['SELL', 'EXIT_LONG'])
+    def _simulate_fill(self, qty: int) -> int:
+        if not self.partial_fill:
+            return qty
+        ratio = np.random.uniform(self.partial_min, 1.0)
+        return max(1, int(qty * ratio))
 
-        # 3. Run VectorBT Portfolio Simulation
-        price = data['close']
-        pf = vbt.Portfolio.from_signals(
-            price,
-            entries=entries,
-            exits=exits,
-            init_cash=self.initial_capital,
-            fees=self.commission,
-            freq='D'
-        )
+    def backtest_symbol(self, symbol: str, start_date: str, end_date: str,
+                        initial_capital: float = 100000.0) -> pd.DataFrame:
+        dm = DataManager()
+        df = dm.get_data(symbol, start_date, end_date, interval='1d')
+        if df.empty:
+            return pd.DataFrame()
 
-        # 4. Extract Key Metrics
-        stats = pf.stats()
-        if stats is None:
-            log.error('Backtest aborted: unable to compute portfolio statistics.')
-            return {}
+        # Generate signals for all strategies
+        signals = {}
+        for s in self.strategies:
+            sig = s.generate_signals(df)
+            signals[s.__class__.__name__] = sig
 
-        stats_map = _to_stats_dict(stats)
-        metrics = {
-            'strategy': strategy_name,
-            'symbol': symbol,
-            'start_value': float(stats_map.get('Start Value') or 0.0),
-            'end_value': float(stats_map.get('End Value') or 0.0),
-            'total_return': float(stats_map.get('Total Return [%]') or 0.0),
-            'max_drawdown': float(stats_map.get('Max Drawdown [%]') or 0.0),
-            'sharpe_ratio': float(stats_map.get('Sharpe Ratio') or 0.0),
-            'win_rate': float(stats_map.get('Win Rate [%]') or 0.0),
-            'total_trades': int(stats_map.get('Total Trades') or 0)
-        }
-        log.success(f"Backtest complete. {strategy_name} on {symbol}: Return={metrics['total_return']:.2f}%, Sharpe={metrics['sharpe_ratio']:.2f}")
-        return metrics
+        position = None
+        trades = []
+        capital = initial_capital
 
-    def run_multi_strategy_backtest(self, strategies: List[Dict[str, Any]], symbol: str, start_date: str, end_date: str) -> Dict[str, Any]:
-        """
-        Runs backtest for multiple strategies on the same symbol.
-        Combines signals with OR logic (any strategy's signal wins).
-        
-        Args:
-            strategies: List of dicts with keys: 'name', 'params'
-            symbol: Stock symbol
-            start_date, end_date: Date range
-        
-        Returns:
-            Combined backtest metrics
-        """
-        log.info(f"Running multi-strategy backtest on {symbol} with {len(strategies)} strategies")
+        for i in range(len(df)):
+            date = df.index[i]
+            price = df['close'].iloc[i]
 
-        # 1. Fetch Data
-        data = self.data_manager.get_data(symbol, start_date, end_date, interval="1d")
-        if data.empty:
-            log.error("Backtest aborted: No data available.")
-            return {}
+            enter_long = any(sig.iloc[i] == Signal.ENTER_LONG for sig in signals.values())
+            exit_long  = any(sig.iloc[i] == Signal.EXIT_LONG  for sig in signals.values())
+            enter_short= any(sig.iloc[i] == Signal.ENTER_SHORT for sig in signals.values())
+            exit_short = any(sig.iloc[i] == Signal.EXIT_SHORT for sig in signals.values())
 
-        # 2. Generate signals from all strategies
-        combined_entries = pd.Series(False, index=data.index)
-        combined_exits = pd.Series(False, index=data.index)
-        
-        for strat_config in strategies:
-            name = strat_config['name']
-            params = strat_config['params']
-            
-            if name == 'TrendFollowing':
-                strategy = TrendFollowingLS(params)
-            elif name == 'MeanReversion':
-                strategy = MeanReversion(params)
-            else:
-                log.warning(f"Strategy '{name}' not found. Skipping.")
-                continue
-            
-            signals = strategy.generate_signals(data)
-            entries = signals.isin(['BUY', 'ENTER_LONG'])
-            exits = signals.isin(['SELL', 'EXIT_LONG'])
-            
-            # Combine with OR logic
-            combined_entries = combined_entries | entries
-            combined_exits = combined_exits | exits
-            log.debug(f"{name}: {entries.sum()} buy signals, {exits.sum()} sell signals")
+            current_side = position.side if position else None
+            action = None
 
-        # 3. Run VectorBT Portfolio Simulation
-        price = data['close']
-        pf = vbt.Portfolio.from_signals(
-            price,
-            entries=combined_entries,
-            exits=combined_exits,
-            init_cash=self.initial_capital,
-            fees=self.commission,
-            freq='D'
-        )
+            if exit_long and current_side == 'BUY':
+                action = 'SELL'
+            elif exit_short and current_side == 'SELL':
+                action = 'BUY_TO_COVER'
+            elif enter_long and current_side is None:
+                action = 'BUY'
+            elif enter_long and current_side == 'SELL':
+                action = 'BUY_TO_COVER'
+            elif enter_short and current_side is None:
+                action = 'SELL_SHORT'
+            elif enter_short and current_side == 'BUY':
+                action = 'SELL'
 
-        # 4. Extract Key Metrics
-        stats = pf.stats()
-        if stats is None:
-            log.error('Backtest aborted: unable to compute portfolio statistics.')
-            return {}
+            atr = (df['high'] - df['low']).rolling(14).mean().iloc[i]
 
-        stats_map = _to_stats_dict(stats)
-        metrics = {
-            'strategies': [s['name'] for s in strategies],
-            'symbol': symbol,
-            'start_value': float(stats_map.get('Start Value') or 0.0),
-            'end_value': float(stats_map.get('End Value') or 0.0),
-            'total_return': float(stats_map.get('Total Return [%]') or 0.0),
-            'max_drawdown': float(stats_map.get('Max Drawdown [%]') or 0.0),
-            'sharpe_ratio': float(stats_map.get('Sharpe Ratio') or 0.0),
-            'win_rate': float(stats_map.get('Win Rate [%]') or 0.0),
-            'total_trades': int(stats_map.get('Total Trades') or 0)
-        }
-        
-        strat_names = ', '.join([s['name'] for s in strategies])
-        log.success(f"Multi-strategy backtest complete ({strat_names}): Return={metrics['total_return']:.2f}%, Sharpe={metrics['sharpe_ratio']:.2f}")
-        return metrics
+            if action and position is None:   # new entry
+                if action == 'BUY':
+                    stop_loss = price - (atr * self.vol_stop_mult)
+                    tp = price + (atr * self.vol_stop_mult * 2)
+                    risk_amount = capital * self.risk_per_trade
+                    qty = int(risk_amount / (atr * self.vol_stop_mult)) if atr > 0 else 10
+                    qty = max(1, self._simulate_fill(qty))
+                    entry = self._apply_slippage(price, 'BUY')
+                    comm = self._commission(qty, entry)
+                    position = BacktestPosition(symbol, 'BUY', qty, entry + comm/qty, stop_loss, tp)
+                elif action == 'SELL_SHORT':
+                    stop_loss = price + (atr * self.vol_stop_mult)
+                    tp = price - (atr * self.vol_stop_mult * 2)
+                    risk_amount = capital * self.risk_per_trade
+                    qty = int(risk_amount / (atr * self.vol_stop_mult)) if atr > 0 else 10
+                    qty = max(1, self._simulate_fill(qty))
+                    entry = self._apply_slippage(price, 'SELL_SHORT')
+                    comm = self._commission(qty, entry)
+                    position = BacktestPosition(symbol, 'SELL', qty, entry - comm/qty, stop_loss, tp)
 
-    def run_multi_symbol_backtest(self, strategy_name: str, symbols: List[str], start_date: str, end_date: str, strategy_params: dict) -> Dict[str, Any]:
-        """
-        Runs backtest for a single strategy across multiple symbols.
-        Returns aggregated portfolio metrics.
-        
-        Args:
-            strategy_name: Name of strategy
-            symbols: List of stock symbols
-            start_date, end_date: Date range
-            strategy_params: Strategy parameters
-        
-        Returns:
-            Combined portfolio metrics
-        """
-        log.info(f"Running {strategy_name} backtest on {len(symbols)} symbols")
-        
-        all_results = []
-        for symbol in symbols:
-            result = self.run_backtest(strategy_name, symbol, start_date, end_date, strategy_params)
-            if result:
-                all_results.append(result)
-        
-        if not all_results:
-            log.error("No successful backtests")
-            return {}
-        
-        # Aggregate metrics
-        avg_return = np.mean([r['total_return'] for r in all_results])
-        avg_sharpe = np.mean([r['sharpe_ratio'] for r in all_results])
-        avg_drawdown = np.mean([r['max_drawdown'] for r in all_results])
-        avg_win_rate = np.mean([r['win_rate'] for r in all_results])
-        total_trades = sum([r['total_trades'] for r in all_results])
-        
-        metrics = {
-            'strategy': strategy_name,
-            'num_symbols': len(symbols),
-            'avg_total_return': avg_return,
-            'avg_max_drawdown': avg_drawdown,
-            'avg_sharpe_ratio': avg_sharpe,
-            'avg_win_rate': avg_win_rate,
-            'total_trades_all': total_trades,
-            'symbol_results': all_results
-        }
-        
-        log.success(f"Multi-symbol backtest complete: Avg Return={avg_return:.2f}%, Avg Sharpe={avg_sharpe:.2f}")
-        return metrics
+            elif action and position:   # close existing position
+                exit_price = self._apply_slippage(price, action)
+                comm = self._commission(position.quantity, exit_price)
+                net_exit = exit_price + (comm / position.quantity) if action == 'BUY_TO_COVER' else exit_price - (comm / position.quantity)
+                if position.side == 'BUY':
+                    pnl = (net_exit - position.entry_price) * position.quantity
+                else:
+                    pnl = (position.entry_price - net_exit) * position.quantity
+                capital += pnl
+                trades.append({'date': date, 'symbol': symbol, 'action': action, 'pnl': pnl})
+                position = None
 
-if __name__ == '__main__':
-    # Example: Single strategy
-    engine = BacktestEngine()
-    result = engine.run_backtest(
-        strategy_name='TrendFollowing',
-        symbol='AAPL',
-        start_date='2020-01-01',
-        end_date='2023-12-31',
-        strategy_params={'fast_ma': 20, 'slow_ma': 50}
-    )
-    print("Single Strategy Result:", result)
-    
-    # Example: Multi-strategy
-    multi_result = engine.run_multi_strategy_backtest(
-        strategies=[
-            {'name': 'TrendFollowing', 'params': {'fast_ma': 20, 'slow_ma': 50}},
-            {'name': 'MeanReversion', 'params': {'bb_period': 20, 'bb_std': 2.0}}
-        ],
-        symbol='AAPL',
-        start_date='2020-01-01',
-        end_date='2023-12-31'
-    )
-    print("Multi-Strategy Result:", multi_result)
+            # Stop‑loss / take‑profit check
+            if position:
+                hit = False
+                if position.side == 'BUY':
+                    if price <= position.stop_loss:
+                        exit_price = position.stop_loss
+                        hit = True
+                    elif position.take_profit and price >= position.take_profit:
+                        exit_price = position.take_profit
+                        hit = True
+                else:
+                    if price >= position.stop_loss:
+                        exit_price = position.stop_loss
+                        hit = True
+                    elif position.take_profit and price <= position.take_profit:
+                        exit_price = position.take_profit
+                        hit = True
+                if hit:
+                    comm = self._commission(position.quantity, exit_price)
+                    net_exit = exit_price + (comm / position.quantity) if position.side == 'SELL' else exit_price - (comm / position.quantity)
+                    if position.side == 'BUY':
+                        pnl = (net_exit - position.entry_price) * position.quantity
+                    else:
+                        pnl = (position.entry_price - net_exit) * position.quantity
+                    capital += pnl
+                    trades.append({'date': date, 'symbol': symbol, 'action': 'STOP/TP', 'pnl': pnl})
+                    position = None
+
+        return pd.DataFrame(trades) if trades else pd.DataFrame()
+
+    def run(self, symbols: List[str], start_date: str, end_date: str,
+            initial_capital: float = 100000.0) -> Dict:
+        results = {}
+        for sym in symbols:
+            trades = self.backtest_symbol(sym, start_date, end_date, initial_capital)
+            if not trades.empty:
+                total_pnl = trades['pnl'].sum()
+                wins = (trades['pnl'] > 0).sum()
+                win_rate = wins / len(trades) if len(trades) else 0
+                results[sym] = {
+                    'total_trades': len(trades),
+                    'win_rate': win_rate,
+                    'total_pnl': total_pnl,
+                    'avg_pnl_per_trade': trades['pnl'].mean(),
+                }
+        return results
