@@ -25,8 +25,10 @@ A fully automated, risk‑managed trading bot for the **NYSE** (via Interactive 
 - **Real‑time dashboard** – FastAPI dashboard showing open positions, equity curve, and trade history.
 - **Realistic paper‑trading simulation** – **simulated slippage, commissions, partial fills, and short‑availability checks** – making the paper account behave exactly like a live account.
 - **Position synchronisation** – internal positions are reconciled with IBKR’s reported positions every iteration.
+- **Multi‑platform support** – trade on IBKR, Binance, OKX, Coinbase, Kraken, KuCoin (ccxt integration). Easily extendable to other exchanges.
+- **Custom API** – REST endpoints for signals, positions, and performance (`/api/signals`, `/api/positions`, `/api/performance`).
 - **Data pipeline** – Yahoo Finance historical data with local Parquet caching and rate‑limit handling.
-- **Notifications** – real‑time alerts to Discord (embeds), Telegram, and Email.
+- **Notifications** – real‑time alerts to Discord (embeds), Telegram, and Email (Brevo API or SMTP).
 - **Backtesting** – vectorized backtesting with `vectorbt` for strategy validation (currently single‑strategy).
 - **Headless operation** – runs 24/7 on a VPS or local machine.
 - **Modular design** – easy to swap data providers, brokers, or strategies.
@@ -35,7 +37,6 @@ A fully automated, risk‑managed trading bot for the **NYSE** (via Interactive 
 ## 🏗️ Architecture
 
 ```plaintext
-
 trading_bot/
 ├── config/              # YAML configuration & templates
 ├── data/                # Data providers, manager & cache
@@ -45,7 +46,15 @@ trading_bot/
 │   ├── trend_following_ls.py    # (long/short TrendFollowingLS)
 │   └── mean_reversion.py        # (Bollinger Bands + RSI)
 ├── backtest/            # Backtesting engine (vectorbt)
-├── execution/           # Broker abstraction & IBKR implementation
+├── execution/           # Broker abstraction & implementations
+│   ├── broker.py
+│   ├── ib_broker.py
+│   ├── binance_broker.py
+│   ├── okx_broker.py
+│   ├── coinbase_broker.py      # (planned)
+│   ├── kraken_broker.py        # (planned)
+│   ├── kucoin_broker.py        # (planned)
+│   └── broker_manager.py
 ├── risk/                # Risk manager (position sizing, limits)
 │   └── position_manager.py
 ├── monitoring/          # Discord, Telegram, Email alerters, health API (FastAPI)
@@ -63,7 +72,7 @@ trading_bot/
 
 - Python 3.11+
 - Interactive Brokers Gateway (or TWS) with paper trading account
-- (Optional) Discord webhook / Telegram bot / Gmail app password for alerts
+- (Optional) Discord webhook / Telegram bot / Email account for alerts
 
 ### Installation
 
@@ -73,7 +82,6 @@ cd trading-bot
 python -m venv venv
 source venv/bin/activate   # Windows: venv\Scripts\activate
 pip install -r requirements.txt
-
 ```
 
 ### Configuration
@@ -92,28 +100,22 @@ pip install -r requirements.txt
    echo "DISCORD_WEBHOOK_URL=https://discord.com/api/webhooks/..." >> .env
    echo "TELEGRAM_BOT_TOKEN=..." >> .env
    echo "TELEGRAM_CHAT_ID=..." >> .env
-   echo "EMAIL_SENDER=your-gmail@gmail.com" >> .env
-   echo "EMAIL_PASSWORD=your-16-char-app-password">>.env
+   echo "EMAIL_SENDER=your-email@gmail.com" >> .env
    echo "EMAIL_RECIPIENT=recipient@email.com" >> .env
-   ```
-
-3. **Optional: Use Brevo for email alerts** instead of Gmail SMTP.
-
-   ```bash
-   echo "EMAIL_SENDER=your-brevo-verified-address@example.com" >> .env
-   echo "EMAIL_RECIPIENT=recipient@email.com" >> .env
+   # For Brevo (primary)
    echo "EMAIL_BREVO_API_KEY=your_brevo_api_key" >> .env
+   # For Gmail SMTP (fallback)
+   echo "EMAIL_PASSWORD=your-16-char-app-password" >> .env
    ```
 
-   - Brevo is now the primary email transport.
-   - SMTP remains available as a fallback if Brevo is not configured or fails.
-   - Use this when SMTP is blocked or when you prefer API-based delivery.
+3. **Optional: Use Brevo for email alerts** instead of Gmail SMTP.  
+   Brevo is the primary transport; SMTP remains available as fallback if Brevo fails. This avoids ISP SMTP blocks.
 
 ### Run in Paper Trading Mode
 
 1. **Start IB Gateway** (paper trading) with API enabled (port 4002).
-2. **Set** paper_trading: false in config/settings.yaml – the bot will now send real bracket orders to the paper account.
-3. **Enable realistic simulations**  in the same config (slippage, commissions, partial fills, short checks – all on by default).
+2. **Set** `paper_trading: false` in `config/settings.yaml` – the bot will now send real bracket orders to the paper account.
+3. **Enable realistic simulations** in the same config (slippage, commissions, partial fills, short checks – all on by default).
 4. **Launch the bot**:
 
    ```bash
@@ -154,26 +156,15 @@ The bot enforces strict risk rules before every trade:
 - **Daily loss limit** – stops trading if the day’s P&L drops below a set threshold.
 - **Max drawdown** – reduces position sizes after a configurable drawdown from peak equity.
 - **ATR‑based stops** – initial and trailing stop‑losses are calculated using Average True Range.
-- **Bracket orders for shorts** – short entries are placed with attached stop‑loss and take‑profit orders.
-- **Shorrt-availability check** – verifies that shares are available to short before placing a short order.
+- **Bracket orders for longs and shorts** – entries are protected with attached stop‑loss and take‑profit orders.
+- **Short‑availability check** – verifies that shares are available to short before placing a short order.
+- **Earnings blackout filter** – avoids opening new positions near earnings announcements.
 
 All values can be adjusted in `config/settings.yaml`.
 
-## 🔔 Notifications
-
-### Discord
-
-Rich embeds with trade details (symbol, action, quantity, price) and error alerts. Set up via webhook URL in `.env`.
-
-### Telegram
-
-Plain text alerts. Requires a bot token and chat ID (obtain via @BotFather). *(Note: you may need to manually obtain your chat ID from `https://api.telegram.org/bot<TOKEN>/getUpdates` – a 403 error indicates an incorrect chat ID.)*
-
-Both can be enabled/disabled independently in the config.
-
 ## ⚡ Execution & Realistic Paper Simulation
 
-The bot connects to Interactive Brokers via ib_async. In paper mode, you can enable a set of realistic simulation features that make the paper account behave indistinguishably from a live account:
+The bot connects to Interactive Brokers via `ib_async`. In paper mode, you can enable a set of realistic simulation features that make the paper account behave indistinguishably from a live account:
 
 | Feature | Description | Config Key |
 | --------- | ------------- | ------------ |
@@ -186,14 +177,27 @@ These are enabled by default in paper mode. Disable them when you switch to a li
 
 ## 🔔 Alerts & Notifications
 
-**Discord**
-Rich embeds with trade details (symbol, action, quantity, price) and error alerts. Set up via webhook URL in .env.
+### Discord
 
-**Telegram**
-Plain text alerts. Requires a bot token and chat ID (obtain via @BotFather).
+Rich embeds with trade details (symbol, action, quantity, price) and error alerts. Set up via webhook URL in `.env`.
 
-**Email**
-Trade alerts and critical error messages sent via Gmail SMTP. Add EMAIL_SENDER, EMAIL_PASSWORD, and EMAIL_RECIPIENT to your .env.
+### Telegram
+
+Plain text alerts. Requires a bot token and chat ID (obtain via @BotFather).  
+*(Note: you may need to manually obtain your chat ID from `https://api.telegram.org/bot<TOKEN>/getUpdates` – a 403 error indicates an incorrect chat ID.)*
+
+### Email
+
+Trade alerts and critical error messages sent via **Brevo API** (primary) or Gmail SMTP (fallback).  
+Add the following to your `.env`:
+
+```bash
+
+EMAIL_SENDER=your-email@gmail.com
+EMAIL_RECIPIENT=recipient@email.com
+EMAIL_BREVO_API_KEY=your-brevo-api-key    # for Brevo
+EMAIL_PASSWORD=your-gmail-app-password    # for SMTP fallback
+```
 
 All three channels can be enabled/disabled independently.
 
