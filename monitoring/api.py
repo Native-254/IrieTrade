@@ -11,7 +11,6 @@ from utils.logger import log
 
 app = FastAPI()
 
-# Global reference (set from live/engine.py)
 trading_engine = None
 
 def set_trading_engine(engine):
@@ -28,20 +27,18 @@ async def account_info():
     if not trading_engine:
         return {"status": "error", "message": "Engine not running"}
     try:
-        broker = trading_engine.broker
-        broker.connect()
-        info = broker.get_account_info()
-        broker.disconnect()
-        return {"status": "success", "data": info}
+        for broker_name, broker in trading_engine.broker_manager.iterate_all():
+            broker.connect()
+            info = broker.get_account_info()
+            broker.disconnect()
+            return {"status": "success", "data": info}
     except Exception:
         return {"status": "error", "message": "Internal error"}
 
-# ------------------ NEW API ENDPOINTS ------------------
 @app.get("/api/signals")
 async def api_signals(symbol: str = Query(..., description="Ticker symbol")):
     if not trading_engine:
         return {"error": "Engine not running"}
-    # Fetch recent data for the symbol
     df = trading_engine.data_manager.get_data(
         symbol,
         start_date=(datetime.now() - timedelta(days=7)).strftime('%Y-%m-%d'),
@@ -49,10 +46,7 @@ async def api_signals(symbol: str = Query(..., description="Ticker symbol")):
         interval="15m", force_refresh=True)
     if df.empty:
         return {"error": "No data"}
-    signals = []
-    for strat in trading_engine.strategies:
-        raw = strat.generate_signals(df).iloc[-1]
-        signals.append(str(raw))
+    signals = [str(strat.generate_signals(df).iloc[-1]) for strat in trading_engine.strategies]
     return {"symbol": symbol, "signals": signals, "last_price": float(df['close'].iloc[-1])}
 
 @app.get("/api/positions")
@@ -60,31 +54,27 @@ async def api_positions():
     if not trading_engine:
         return {"error": "Engine not running"}
     positions = []
-    for pos in trading_engine.position_manager.positions.values():
-        positions.append({
-            'symbol': pos.symbol,
-            'side': pos.side,
-            'quantity': pos.quantity,
-            'entry_price': pos.entry_price,
-            'stop_loss': pos.stop_loss,
-        })
+    for pm in trading_engine.position_managers.values():
+        for pos in pm.positions.values():
+            positions.append({
+                'symbol': pos.symbol,
+                'side': pos.side,
+                'quantity': pos.quantity,
+                'entry_price': pos.entry_price,
+                'stop_loss': pos.stop_loss,
+            })
     return {"positions": positions}
 
 @app.get("/api/performance")
 async def api_performance():
     if not trading_engine:
         return {"error": "Engine not running"}
-    nav = trading_engine.risk_manager.current_capital
-    daily_pnl = trading_engine.risk_manager.daily_pnl
-    open_risk = trading_engine.risk_manager.open_risk
-    return {
-        "nav": nav,
-        "daily_pnl": daily_pnl,
-        "open_risk": open_risk,
-        "open_positions": len(trading_engine.position_manager.positions),
-    }
+    nav = sum(rm.current_capital for rm in trading_engine.risk_managers.values())
+    daily_pnl = sum(rm.daily_pnl for rm in trading_engine.risk_managers.values())
+    open_risk_val = sum(rm.open_risk for rm in trading_engine.risk_managers.values())
+    open_positions = sum(len(pm.positions) for pm in trading_engine.position_managers.values())
+    return {"nav": nav, "daily_pnl": daily_pnl, "open_risk": open_risk_val, "open_positions": open_positions}
 
-# ------------------ DASHBOARD (unchanged) ------------------
 @app.get("/dashboard", response_class=HTMLResponse)
 async def dashboard():
     if not trading_engine:
@@ -94,127 +84,96 @@ async def dashboard():
     if not history or len(history) < 2:
         return HTMLResponse("<h2>Waiting for data... (first point recorded)</h2>")
 
+    nav = sum(rm.current_capital for rm in trading_engine.risk_managers.values())
+    daily_pnl = sum(rm.daily_pnl for rm in trading_engine.risk_managers.values())
+    open_risk_val = sum(rm.open_risk for rm in trading_engine.risk_managers.values())
+    positions = {}
+    for pm in trading_engine.position_managers.values():
+        positions.update(pm.positions)
+    open_pos = len(positions)
+
     df = pd.DataFrame(history, columns=['time', 'nav'])
     df.set_index('time', inplace=True)
     df = df.sort_index()
 
-    # Summary stats
-    last_nav = df['nav'].iloc[-1]
-    first_nav = df['nav'].iloc[0]
-    total_return = (last_nav - first_nav) / first_nav * 100
+    last_nav = df['nav'].iloc[-1] if len(df) else nav
+    first_nav = df['nav'].iloc[0] if len(df) else nav
+    total_return = (last_nav - first_nav) / first_nav * 100 if first_nav else 0
     daily_change = df['nav'].iloc[-1] - df['nav'].iloc[-2] if len(df) > 1 else 0
     daily_pct = (daily_change / df['nav'].iloc[-2]) * 100 if len(df) > 1 else 0
-    current_capital = trading_engine.risk_manager.current_capital
-    latest_prices = getattr(trading_engine, 'latest_prices', {}) or {}
-    
-    # Compute aggregate U-P&L from positions directly (accurate)
+    current_capital = nav
+
+    latest_prices = {}
+    for bp in trading_engine.broker_latest_prices.values():
+        latest_prices.update(bp)
     computed_unrealized = 0.0
-    if trading_engine.open_positions:
-        for pos in trading_engine.open_positions.values():
-            price = latest_prices.get(pos.symbol, pos.entry_price)
-            if pos.side == 'BUY':
-                computed_unrealized += (price - pos.entry_price) * pos.quantity
-            else:  # SELL (short)
-                computed_unrealized += (pos.entry_price - price) * pos.quantity
-    
+    for pos in positions.values():
+        price = latest_prices.get(pos.symbol, pos.entry_price)
+        if pos.side == 'BUY':
+            computed_unrealized += (price - pos.entry_price) * pos.quantity
+        else:
+            computed_unrealized += (pos.entry_price - price) * pos.quantity
     unrealized_pnl = computed_unrealized
-    realized_pnl = getattr(trading_engine, 'realized_pnl', 0.0)  # will remain 0 until trades close
+    realized_pnl = getattr(trading_engine, 'realized_pnl', 0.0)
     trading_total = unrealized_pnl + realized_pnl
     interest_effect = (last_nav - first_nav) - trading_total
 
-    # Compute rolling 30-day Sharpe if we have enough history
     rolling_sharpe = None
     if len(df) >= 30:
         daily_returns = df['nav'].pct_change().dropna()
         if len(daily_returns) >= 30:
             sharpe_series = (daily_returns.rolling(30).mean() / daily_returns.rolling(30).std()) * (252 ** 0.5)
             rolling_sharpe = sharpe_series.iloc[-1] if not sharpe_series.empty else None
-
-    # Format the rolling Sharpe value safely
     sharpe_display = f"{rolling_sharpe:.2f}" if rolling_sharpe is not None else '—'
+
+    bot_status = "Running" if trading_engine.is_running else "Stopped"
+    portfolio_heat = open_risk_val / current_capital * 100 if current_capital else 0.0
 
     # Plotly chart
     fig = make_subplots(rows=1, cols=1)
-
-    # Color based on trend
     color_line = '#00b894' if total_return >= 0 else '#e17055'
-
     fig.add_trace(go.Scatter(
-        x=df.index,
-        y=df['nav'],
-        mode='lines',
+        x=df.index, y=df['nav'], mode='lines',
         line=dict(color=color_line, width=2),
         fill='tozeroy',
         fillcolor='rgba(0, 184, 148, 0.1)' if total_return >= 0 else 'rgba(225, 112, 85, 0.1)',
         name='NAV'
     ))
-
     fig.update_layout(
         template='plotly_dark',
-        title={
-            'text': f'IrieTrade Equity Curve ({df.index[0].strftime("%b %d")} – {df.index[-1].strftime("%b %d")})',
-            'x': 0.05,
-            'font': {'size': 24, 'family': 'Arial Black'}
-        },
+        title={'text': 'IrieTrade Equity Curve', 'x': 0.05, 'font': {'size': 24, 'family': 'Arial Black'}},
         xaxis=dict(showgrid=False, zeroline=False),
-        yaxis=dict(
-            title='Net Asset Value (USD)',
-            showgrid=True,
-            gridcolor='rgba(255,255,255,0.05)',
-            zeroline=False
-        ),
-        paper_bgcolor='rgba(0,0,0,0)',
-        plot_bgcolor='rgba(0,0,0,0)',
-        font=dict(color='#dfe6e9'),
-        margin=dict(l=20, r=20, t=60, b=20),
-        hovermode='x unified'
+        yaxis=dict(title='Net Asset Value (USD)', showgrid=True, gridcolor='rgba(255,255,255,0.05)', zeroline=False),
+        paper_bgcolor='rgba(0,0,0,0)', plot_bgcolor='rgba(0,0,0,0)',
+        font=dict(color='#dfe6e9'), margin=dict(l=20, r=20, t=60, b=20), hovermode='x unified'
     )
-
     plot_html = fig.to_html(full_html=False, config={'responsive': True})
 
-    # Number of open positions
-    open_pos = len(trading_engine.open_positions)
-    bot_status = "Running" if trading_engine.is_running else "Stopped"
-    daily_pnl = trading_engine.risk_manager.daily_pnl
-    portfolio_heat = (
-        trading_engine.risk_manager.open_risk / current_capital * 100
-        if current_capital else 0.0
-    )
-
+    # Positions table
     position_rows = ""
-    if trading_engine.open_positions:
-        latest_prices = getattr(trading_engine, 'latest_prices', {}) or {}
-        for pos in trading_engine.open_positions.values():
-            current_price = latest_prices.get(pos.symbol, pos.entry_price)
-            if pos.side == 'BUY':
-                pnl = (current_price - pos.entry_price) * pos.quantity
-            else:
-                pnl = (pos.entry_price - current_price) * pos.quantity
-            pnl_class = 'metric-positive' if pnl >= 0 else 'metric-negative'
-            stop_display = f"${pos.stop_loss:,.2f}" if pos.stop_loss else "—"
-            position_rows += f"""
-
-                <tr>
-                    <td>{pos.symbol}</td>
-                    <td>{pos.side}</td>
-                    <td>{pos.quantity}</td>
-                    <td>${pos.entry_price:,.2f}</td>
-                    <td>{stop_display}</td>
-                    <td>${current_price:,.2f}</td>
-                    <td class=\"{pnl_class}\">{pnl:+,.2f}</td>
-                </tr>
-            """
-    else:
+    for pos in positions.values():
+        current_price = latest_prices.get(pos.symbol, pos.entry_price)
+        if pos.side == 'BUY':
+            pnl = (current_price - pos.entry_price) * pos.quantity
+        else:
+            pnl = (pos.entry_price - current_price) * pos.quantity
+        pnl_class = 'metric-positive' if pnl >= 0 else 'metric-negative'
+        stop_display = f"${pos.stop_loss:,.2f}" if pos.stop_loss else "—"
+        position_rows += f"""
+            <tr>
+                <td>{pos.symbol}</td><td>{pos.side}</td><td>{pos.quantity}</td>
+                <td>${pos.entry_price:,.2f}</td><td>{stop_display}</td>
+                <td>${current_price:,.2f}</td><td class="{pnl_class}">{pnl:+,.2f}</td>
+            </tr>"""
+    if not position_rows:
         position_rows = "<tr><td colspan='7'>No active positions</td></tr>"
 
     recent_trades_html = ""
-    if getattr(trading_engine, 'trade_results', None):
+    if trading_engine.trade_results:
         recent_trades_html = "<ul style='list-style:none; padding:0; color:#b0becd; font-size:14px;'>"
         for result_type, pnl_frac in trading_engine.trade_results[-10:]:
             color = "#00d084" if result_type == 'win' else "#ff7c7c"
-            recent_trades_html += (
-                f"<li style='margin:4px 0;'><span style='color:{color};'>{result_type.upper()}</span> - {pnl_frac:+.2%}</li>"
-            )
+            recent_trades_html += f"<li style='margin:4px 0;'><span style='color:{color};'>{result_type.upper()}</span> - {pnl_frac:+.2%}</li>"
         recent_trades_html += "</ul>"
     else:
         recent_trades_html = "<p>No closed trades yet.</p>"
