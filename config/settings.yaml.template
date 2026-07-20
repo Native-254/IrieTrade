@@ -1,65 +1,134 @@
-# config/settings.yaml
 general:
-  bot_name: "IrieTrade" # Your bot's name. Swahili for 'Loan' or 'Credit'
-  log_level: "INFO" # DEBUG, INFO, WARNING, ERROR
-  timezone: "Africa/Nairobi" # Important for scheduling
+  bot_name: "IrieTrade"
+  log_level: "INFO"
+  timezone: "Africa/Nairobi"
+
+trading:
+  platform: "ib"                     # ib, binance, okx, coinbase, kraken, kucoin
+  platforms:                         # used when running multiple platforms at once
+    - "ib"
+  symbols: ["AAPL", "MSFT", "GOOGL", "TSLA", "NVDA", "AMZN", "META", "JPM", "V", "MA", "PG", "DIS", "HD", "BAC", "VZ", "ADBE", "CMCSA", "NFLX", "INTC", "CSCO", "PFE", "MRK", "KO", "PEP", "WMT", "CVX", "XOM", "T", "UNH", "COST", "ORCL", "ABT", "CRM", "NKE", "MCD", "IBM", "LLY", "MDT", "BMY", "AMGN", "SBUX", "QCOM", "TXN", "GILD", "FISV", "INTU", "GE", "BA", "CAT", "MMM", "AXP", "SPGI", "DE", "DUK", "SO", "NEE", "EXC", "AEP", "ED", "D", "EIX", "PEG", "SRE", "WEC", "ES", "CMS"]
 
 exchanges:
-  nyse:
-    broker: "ib" # Interactive Brokers
-    port: 7497 # TWS paper trading port
+  ib:
+    port: 4002                      # paper trading port
     client_id: 1
-    account_id: "YOUR_IB_PAPER_ACCOUNT" # e.g., "DU123456"
-  nse:
-    broker: "ib" # Using IB for global access, but you'd use a local broker's API
-    # This is a placeholder. For NSE, you'd integrate with a local broker's API.
-    # We'll simulate NSE data for now.
+    account_id: "DUO892946"
+  binance:
+    testnet: true
+  okx:
+    testnet: true
+  coinbase:
+    testnet: true
+  kraken:
+    testnet: true
+  kucoin:
+    testnet: true
 
 data:
   sources:
     - name: "yfinance"
       enabled: true
-    - name: "ib"
-      enabled: true
   update_frequency:
-    historical: "1d" # For daily data
-    intraday: "5m" # For 5-minute bars
+    historical: "1d"
+    intraday: "5m"
 
 risk_management:
-  max_capital_per_trade: 0.02 # 2% of total capital per trade
-  max_portfolio_heat: 0.15 # 15% total risk across all open positions
-  daily_loss_limit: 0.05 # Stop trading if down 5% on the day
-  max_drawdown: 0.20 # Reduce size by 50% if drawdown exceeds 20%
-  volatility_stop_multiplier: 2.0 # Use 2x ATR for stop-loss
+  max_capital_per_trade: 0.02
+  max_portfolio_heat: 0.15
+  daily_loss_limit: 0.05
+  max_drawdown: 0.20
+  volatility_stop_multiplier: 2.0
+  max_net_exposure: 0.5
+  max_gross_exposure: 1.5
+  max_position_pct: 0.20
 
 strategies:
   active:
-    - name: "MagicFormula"
-      type: "fundamental"
+    - name: "TrendFollowingLongOnly"
+      type: "technical"
       enabled: true
     - name: "TrendFollowing"
       type: "technical"
       enabled: true
+    - name: "MeanReversion"
+      type: "technical"
+      enabled: true
+    - name: "Breakout"
+      type: "technical"
+      enabled: false                  # not implemented yet
+    - name: "TrendFollowingLS"
+      type: "technical"
+      enabled: true
   parameters:
-    magic_formula:
-      rebalance_frequency: "monthly"
-      min_market_cap: 1000000000 # $1B
     trend_following:
       fast_ma: 50
       slow_ma: 200
       rsi_period: 14
       rsi_oversold: 30
       rsi_overbought: 70
+    trend_following_long_only:
+      fast_ma: 50
+      slow_ma: 200
+      rsi_period: 14
+      rsi_oversold: 30
+      rsi_overbought: 70
+    mean_reversion:
+      bb_period: 20
+      bb_std: 2.0
+      rsi_period: 14
+      rsi_oversold: 30
+      rsi_overbought: 70
+    breakout:
+      period: 20
+    trend_following_ls:
+      fast_ma: 50
+      slow_ma: 200
+      rsi_period: 14
+      rsi_oversold: 30
+      rsi_overbought: 70
+    intraday:
+      trend_following:
+        fast_ma: 20
+        slow_ma: 50
+        rsi_period: 14
+        rsi_oversold: 30
+        rsi_overbought: 70
+      mean_reversion:
+        bb_period: 12
+        bb_std: 2.0
+        rsi_period: 14
+        rsi_oversold: 30
+        rsi_overbought: 70
+      trend_following_ls:
+        fast_ma: 20
+        slow_ma: 50
+        rsi_period: 14
+        rsi_oversold: 30
+        rsi_overbought: 70
 
 execution:
-  paper_trading: true
-  order_timeout: 60 # seconds
-  slippage_model: "fixed" # or 'adaptive'
-  fixed_slippage_bps: 5 # 0.05% slippage
+  paper_trading: false               # false → bot sends real orders (paper account)
+  simulate_slippage: true
+  slippage_percent: 0.0005
+  simulate_commissions: true
+  commission_per_share: 0.005
+  commission_min: 1.0
+  commission_max_pct: 0.01
+  short_availability_check: true
+  simulate_partial_fills: true
+  partial_fill_min_ratio: 0.8
+  earnings_avoidance: true
+  earnings_avoidance_days: 5
 
 monitoring:
+  email:
+    enabled: true
   telegram:
-    enabled: false
-    bot_token: "YOUR_TELEGRAM_BOT_TOKEN"
-    chat_id: "YOUR_CHAT_ID"
-  health_check_port: 8000 # For FastAPI health endpoint
+    enabled: true
+    bot_token: ""
+    chat_id: ""
+  discord:
+    enabled: true
+    webhook_url: "https://discord.com/api/webhooks/..."
+  health_check_port: 8000

@@ -9,7 +9,7 @@ from execution.broker import Broker
 class IBBroker(Broker):
     def __init__(self):
         self.ib = IB()
-        self.config = CONFIG['exchanges']['nyse']
+        self.config = CONFIG['exchanges']['ib']   # was 'nyse', now 'ib'
         self.connected = False
 
     def connect(self):
