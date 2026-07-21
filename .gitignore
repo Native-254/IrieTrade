@@ -3,7 +3,7 @@ __pycache__/
 *.pyc
 logs/
 data/raw/
-data/.emcryption_key
+data/.encryption_key
 .env
 config/settings.yaml
 .qodo
