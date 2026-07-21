@@ -1,20 +1,33 @@
 # monitoring/api.py
-from fastapi import FastAPI, Query, Request
+from fastapi import Depends, FastAPI, HTTPException, Query, Request
 from fastapi.responses import HTMLResponse, FileResponse
+from fastapi.security import HTTPBasic, HTTPBasicCredentials
 import plotly.graph_objects as go
 from plotly.subplots import make_subplots
 import pandas as pd
 from datetime import datetime, timedelta
 import uvicorn
 import yaml
+import secrets
+import os
 from pathlib import Path
 from utils.config import CONFIG
 from utils.logger import log
+from utils.security import encrypt 
 from execution.ib_broker import IBBroker
 from execution.binance_broker import BinanceBroker
 from execution.okx_broker import OKXBroker
 
 app = FastAPI()
+security = HTTPBasic()
+
+MASTER_PASSWORD = os.getenv('MASTER_PASSWORD', '')
+
+def verify_admin(credentials: HTTPBasicCredentials = Depends(security)):
+    correct = secrets.compare_digest(credentials.password, MASTER_PASSWORD)
+    if not correct:
+        raise HTTPException(status_code=401, detail="Incorrect password")
+    return True
 
 trading_engine = None
 
@@ -400,7 +413,7 @@ def test_broker_connection(broker_name: str, credentials: dict) -> bool:
         return False
 
 @app.post("/api/setup/validate")
-async def setup_validate(request: Request):
+async def setup_validate(request: Request, authenticated: bool = Depends(verify_admin)):
     data = await request.json()
     brokers = data.get('brokers', [])
     credentials = data.get('credentials', {})
@@ -411,7 +424,7 @@ async def setup_validate(request: Request):
     return {"success": True, "message": "All connections successful"}
 
 @app.post("/api/setup/save")
-async def setup_save(request: Request):
+async def setup_save(request: Request, authenticated: bool = Depends(verify_admin)):
     data = await request.json()
     brokers = data.get('brokers', [])
     credentials = data.get('credentials', {})
@@ -422,7 +435,8 @@ async def setup_save(request: Request):
     with open(env_path, 'a') as f:
         for broker in brokers:
             if broker == 'ib':
-                f.write(f"IB_ACCOUNT_ID={credentials[broker]['account_id']}\n")
+                val = credentials[broker]['account_id']
+                f.write(f"IB_ACCOUNT_ID={encrypt(val)}\n")
             elif broker == 'binance':
                 f.write(f"BINANCE_API_KEY={credentials[broker]['api_key']}\n")
                 f.write(f"BINANCE_SECRET={credentials[broker]['secret']}\n")
