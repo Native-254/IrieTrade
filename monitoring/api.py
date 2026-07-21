@@ -1,13 +1,18 @@
 # monitoring/api.py
-from fastapi import FastAPI, Query
-from fastapi.responses import HTMLResponse
+from fastapi import FastAPI, Query, Request
+from fastapi.responses import HTMLResponse, FileResponse
 import plotly.graph_objects as go
 from plotly.subplots import make_subplots
 import pandas as pd
 from datetime import datetime, timedelta
 import uvicorn
+import yaml
+from pathlib import Path
 from utils.config import CONFIG
 from utils.logger import log
+from execution.ib_broker import IBBroker
+from execution.binance_broker import BinanceBroker
+from execution.okx_broker import OKXBroker
 
 app = FastAPI()
 
@@ -241,8 +246,8 @@ async def dashboard():
                 <a class="nav-item active" href="#overview">Live Dashboard</a>
                 <a class="nav-item" href="#positions">Portfolio</a>
                 <a class="nav-item" href="#alerts">Alerts</a>
-                <a class="nav-item" href="#overview">Settings</a>
-                <a class="nav-item" href="#overview">Support</a>
+                <a class="nav-item" href="/setup">Settings</a>
+                <a class="nav-item" href="#support">Support</a>
             </aside>
             <main>
                 <section id="overview" class="panel">
@@ -366,6 +371,85 @@ async def dashboard():
     </body>
     </html>
     """)
+
+# ---------- Onboarding / Setup ----------
+def test_broker_connection(broker_name: str, credentials: dict) -> bool:
+    """Quickly test if a broker can connect with the given credentials."""
+    try:
+        if broker_name == 'ib':
+            broker = IBBroker()
+            broker.config['account_id'] = credentials['account_id']
+            broker.connect()
+        elif broker_name == 'binance':
+            broker = BinanceBroker({'testnet': False})
+            broker.api_key = credentials['api_key']
+            broker.secret = credentials['secret']
+            broker.connect()
+        elif broker_name == 'okx':
+            broker = OKXBroker({'testnet': False})
+            broker.api_key = credentials['api_key']
+            broker.secret = credentials['secret']
+            broker.password = credentials.get('passphrase', '')
+            broker.connect()
+        else:
+            return False
+        broker.get_account_info()  # verify connection works
+        broker.disconnect()
+        return True
+    except Exception:
+        return False
+
+@app.post("/api/setup/validate")
+async def setup_validate(request: Request):
+    data = await request.json()
+    brokers = data.get('brokers', [])
+    credentials = data.get('credentials', {})
+
+    for broker in brokers:
+        if not test_broker_connection(broker, credentials.get(broker, {})):
+            return {"success": False, "message": f"Connection failed for {broker}"}
+    return {"success": True, "message": "All connections successful"}
+
+@app.post("/api/setup/save")
+async def setup_save(request: Request):
+    data = await request.json()
+    brokers = data.get('brokers', [])
+    credentials = data.get('credentials', {})
+    symbols = data.get('symbols', [])
+
+    # 1. Write .env file
+    env_path = Path('.env')
+    with open(env_path, 'a') as f:
+        for broker in brokers:
+            if broker == 'ib':
+                f.write(f"IB_ACCOUNT_ID={credentials[broker]['account_id']}\n")
+            elif broker == 'binance':
+                f.write(f"BINANCE_API_KEY={credentials[broker]['api_key']}\n")
+                f.write(f"BINANCE_SECRET={credentials[broker]['secret']}\n")
+            elif broker == 'okx':
+                f.write(f"OKX_API_KEY={credentials[broker]['api_key']}\n")
+                f.write(f"OKX_SECRET={credentials[broker]['secret']}\n")
+                f.write(f"OKX_PASSPHRASE={credentials[broker].get('passphrase', '')}\n")
+
+    # 2. Update settings.yaml with brokers and symbols
+    config_path = Path('config/settings.yaml')
+    with open(config_path, 'r') as f:
+        config = yaml.safe_load(f)
+    config['trading']['platforms'] = brokers
+    config['trading']['platform'] = brokers[0]
+    config['trading']['symbols'] = symbols
+    with open(config_path, 'w') as f:
+        yaml.dump(config, f)
+
+    # 3. Signal the engine to restart with new config
+    if trading_engine:
+        trading_engine.restart_with_new_config(config)
+
+    return {"success": True, "message": "Configuration saved and bot restarted"}
+
+@app.get("/setup")
+async def setup_page():
+    return FileResponse("config/setup.html")
 
 def run_api():
     port = CONFIG['monitoring']['health_check_port']

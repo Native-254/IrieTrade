@@ -1,0 +1,159 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>IrieTrade Setup</title>
+  <style>
+    body { font-family: 'Segoe UI', sans-serif; max-width: 700px; margin: 2rem auto; background: #0b111a; color: #e0e0e0; }
+    .step { display: none; }
+    .step.active { display: block; }
+    label { display: block; margin-top: 1rem; font-weight: bold; }
+    input, select, button { padding: 0.5rem; font-size: 1rem; width: 100%; margin-top: 0.5rem; border: 1px solid #2d3436; border-radius: 6px; background: #141d2e; color: #fff; }
+    button { background: #00b894; color: #000; font-weight: bold; cursor: pointer; }
+    button:hover { background: #00a381; }
+    .error { color: #e17055; margin-top: 0.5rem; }
+    .success { color: #00b894; }
+    .broker-checkbox { display: inline-block; margin-right: 1rem; }
+  </style>
+</head>
+<body>
+  <h2>IrieTrade Setup Wizard</h2>
+
+  <!-- Step 1: Choose brokers -->
+  <div id="step1" class="step active">
+    <h3>1. Select your broker(s)</h3>
+    <label><input type="checkbox" class="broker" value="ib"> Interactive Brokers (IBKR)</label>
+    <label><input type="checkbox" class="broker" value="binance"> Binance</label>
+    <label><input type="checkbox" class="broker" value="okx"> OKX</label>
+    <label><input type="checkbox" class="broker" value="coinbase"> Coinbase</label>
+    <label><input type="checkbox" class="broker" value="kraken"> Kraken</label>
+    <label><input type="checkbox" class="broker" value="kucoin"> KuCoin</label>
+    <br>
+    <button onclick="nextStep(1)">Next</button>
+  </div>
+
+  <!-- Step 2: Enter credentials for each selected broker -->
+  <div id="step2" class="step">
+    <h3>2. Enter API credentials</h3>
+    <div id="credentials-form"></div>
+    <button onclick="validateCredentials()">Test Connection</button>
+    <div id="validate-status"></div>
+    <br>
+    <button onclick="nextStep(2)">Next</button>
+  </div>
+
+  <!-- Step 3: Choose symbols -->
+  <div id="step3" class="step">
+    <h3>3. Add symbols (comma‑separated)</h3>
+    <label for="symbols">Symbols</label>
+    <textarea id="symbols" rows="4" placeholder="AAPL, MSFT, GOOGL, …"></textarea>
+    <br><br>
+    <button onclick="saveConfig()">Save & Start Bot</button>
+    <div id="save-status"></div>
+  </div>
+
+  <script>
+    let selectedBrokers = [];
+
+    function nextStep(current) {
+      if (current === 1) {
+        selectedBrokers = Array.from(document.querySelectorAll('.broker:checked')).map(cb => cb.value);
+        if (selectedBrokers.length === 0) return alert('Select at least one broker');
+        buildCredentialsForm();
+      }
+      document.querySelectorAll('.step').forEach(s => s.classList.remove('active'));
+      document.getElementById(`step${current + 1}`).classList.add('active');
+    }
+
+    function buildCredentialsForm() {
+      const form = document.getElementById('credentials-form');
+      form.innerHTML = '';
+      selectedBrokers.forEach(broker => {
+        form.innerHTML += `<h4>${broker.toUpperCase()}</h4>`;
+        if (broker === 'ib') {
+          form.innerHTML += `
+            <label>IB Account ID</label>
+            <input type="text" id="${broker}-account" placeholder="DU123456" required>
+          `;
+        } else {
+          form.innerHTML += `
+            <label>API Key</label>
+            <input type="text" id="${broker}-key" required>
+            <label>API Secret</label>
+            <input type="text" id="${broker}-secret" required>
+            ${broker === 'okx' ? `<label>Passphrase</label><input type="text" id="${broker}-passphrase" required>` : ''}
+          `;
+        }
+      });
+    }
+
+    async function validateCredentials() {
+      const status = document.getElementById('validate-status');
+      status.innerHTML = 'Testing connections…';
+      const payload = { brokers: selectedBrokers, credentials: {} };
+      selectedBrokers.forEach(broker => {
+        if (broker === 'ib') {
+          payload.credentials[broker] = { account_id: document.getElementById(`${broker}-account`).value };
+        } else {
+          payload.credentials[broker] = {
+            api_key: document.getElementById(`${broker}-key`).value,
+            secret: document.getElementById(`${broker}-secret`).value,
+            passphrase: broker === 'okx' ? document.getElementById(`${broker}-passphrase`).value : ''
+          };
+        }
+      });
+
+      try {
+        const resp = await fetch('/api/setup/validate', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(payload)
+        });
+        const result = await resp.json();
+        if (result.success) {
+          status.innerHTML = '<span class="success">✓ All connections successful</span>';
+        } else {
+          status.innerHTML = `<span class="error">✗ ${result.message}</span>`;
+        }
+      } catch (e) {
+        status.innerHTML = `<span class="error">Network error</span>`;
+      }
+    }
+
+    async function saveConfig() {
+      const status = document.getElementById('save-status');
+      status.innerHTML = 'Saving configuration…';
+      const symbols = document.getElementById('symbols').value.split(',').map(s => s.trim()).filter(Boolean);
+      const credentials = {};
+      selectedBrokers.forEach(broker => {
+        if (broker === 'ib') {
+          credentials[broker] = { account_id: document.getElementById(`${broker}-account`).value };
+        } else {
+          credentials[broker] = {
+            api_key: document.getElementById(`${broker}-key`).value,
+            secret: document.getElementById(`${broker}-secret`).value,
+            passphrase: broker === 'okx' ? document.getElementById(`${broker}-passphrase`).value : ''
+          };
+        }
+      });
+
+      try {
+        const resp = await fetch('/api/setup/save', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ brokers: selectedBrokers, credentials, symbols })
+        });
+        const result = await resp.json();
+        if (result.success) {
+          status.innerHTML = '<span class="success">✓ Configuration saved. Bot is restarting…</span>';
+          setTimeout(() => window.location.href = '/dashboard', 3000);
+        } else {
+          status.innerHTML = `<span class="error">✗ ${result.message}</span>`;
+        }
+      } catch (e) {
+        status.innerHTML = `<span class="error">Network error</span>`;
+      }
+    }
+  </script>
+</body>
+</html>

@@ -93,6 +93,14 @@ class TradingEngine:
         log.success("Trading Engine initialized.")
 
     # ------------------------------------------------------------------
+    # NEW METHOD: Restart engine with fresh config
+    # ------------------------------------------------------------------
+    def restart_with_new_config(self, new_config):
+        """Re‑initialise the engine with a fresh config (called after setup)."""
+        log.info("Restarting engine with new configuration…")
+        self.__init__(config=new_config)
+
+    # ------------------------------------------------------------------
     # Shared helpers
     # ------------------------------------------------------------------
     def _apply_slippage(self, price: float, action: str) -> float:
