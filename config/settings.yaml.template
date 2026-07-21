@@ -13,7 +13,7 @@ exchanges:
   ib:
     port: 4002                      # paper trading port
     client_id: 1
-    account_id: "DUO892946"
+    account_id: "DU12345678"
   binance:
     testnet: true
   okx:
