@@ -93,11 +93,44 @@ class TradingEngine:
         log.success("Trading Engine initialized.")
 
     # ------------------------------------------------------------------
-    # NEW METHOD: Restart engine with fresh config
+    # Teardown & Restart
     # ------------------------------------------------------------------
+    def _teardown(self):
+        """Cleanly tear down all engine resources before re-initialising."""
+        log.info("Tearing down engine resources…")
+        # 1. Disconnect all brokers
+        for broker_name, broker in self.broker_manager.iterate_all():
+            try:
+                broker.disconnect()
+                log.info(f"Disconnected broker: {broker_name}")
+            except Exception as e:
+                log.warning(f"Error disconnecting broker {broker_name}: {e}")
+
+        # 2. Clear all position managers & risk managers
+        self.position_managers.clear()
+        self.risk_managers.clear()
+
+        # 3. Clear all schedule jobs (prevents stale jobs from firing)
+        schedule.clear()
+
+        # 4. Stop the engine loop
+        self.is_running = False
+
+        # 5. Clear accumulated trade and equity history
+        self.trade_results.clear()
+        self.equity_history.clear()
+
+        # 6. Clear per‑broker state
+        self.symbols_by_broker.clear()
+        self.broker_latest_prices.clear()
+        self.broker_last_logged_qty.clear()
+
+        log.info("Teardown complete. Engine is clean.")
+
     def restart_with_new_config(self, new_config):
         """Re‑initialise the engine with a fresh config (called after setup)."""
         log.info("Restarting engine with new configuration…")
+        self._teardown()
         self.__init__(config=new_config)
 
     # ------------------------------------------------------------------

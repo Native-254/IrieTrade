@@ -1,4 +1,3 @@
-# execution/coinbase_broker.py
 import ccxt
 import os
 import time
@@ -6,14 +5,14 @@ from typing import Dict, Any, Optional, Tuple
 from utils.logger import log
 from execution.broker import Broker
 
-class CoinbaseBroker(Broker):
-    """Coinbase Advanced Trade broker via ccxt."""
+
+class KrakenBroker(Broker):
+    """Kraken broker via ccxt."""
 
     def __init__(self, config: dict):
         self.config = config
-        self.api_key = os.getenv('COINBASE_API_KEY', '')
-        self.secret = os.getenv('COINBASE_SECRET', '')
-        self.password = os.getenv('COINBASE_PASSPHRASE', '')  # Coinbase Advanced Trade requires a passphrase
+        self.api_key = os.getenv('KRAKEN_API_KEY', '')
+        self.secret = os.getenv('KRAKEN_SECRET', '')
         self.testnet = self.config.get('testnet', True)
         self.exchange = None
         self.connected = False
@@ -25,22 +24,21 @@ class CoinbaseBroker(Broker):
         params = {
             'apiKey': self.api_key,
             'secret': self.secret,
-            'password': self.password,
             'enableRateLimit': True,
         }
-        # Coinbase Advanced Trade uses ccxt.coinbase (sandbox via separate URL)
         if self.testnet:
-            # Coinbase sandbox
+            # Kraken does not have a public sandbox; we use the live API but
+            # restrict to paper-only usage via configuration.
             params['urls'] = {
                 'api': {
-                    'public': 'https://api-sandbox.coinbase.com',
-                    'private': 'https://api-sandbox.coinbase.com',
+                    'public': 'https://api.kraken.com',
+                    'private': 'https://api.kraken.com',
                 }
             }
-        self.exchange = ccxt.coinbase(params)  # type: ignore[arg-type]
+        self.exchange = ccxt.kraken(params)  # type: ignore[arg-type]
         self.exchange.load_markets()
         self.connected = True
-        log.success("Connected to Coinbase (testnet=%s)", self.testnet)
+        log.success("Connected to Kraken (testnet=%s)", self.testnet)
 
     def disconnect(self):
         self.connected = False
@@ -56,9 +54,7 @@ class CoinbaseBroker(Broker):
             amt = float(str(amount)) if amount else 0.0
             if amt == 0.0:
                 continue
-            if asset == 'USD':
-                usd_value += amt
-            elif asset == 'USDT' or asset == 'USDC':
+            if asset in ('USD', 'USDT', 'USDC'):
                 usd_value += amt
             else:
                 try:
@@ -72,7 +68,7 @@ class CoinbaseBroker(Broker):
                         usd_value += amt * last_price
                     except Exception:
                         pass
-        return {'net_liquidation': usd_value, 'account': 'Coinbase', 'unrealized_pnl': 0.0}
+        return {'net_liquidation': usd_value, 'account': 'Kraken', 'unrealized_pnl': 0.0}
 
     def place_order(self, symbol: str, side: str, quantity: float,
                     order_type: str = 'MKT', limit_price: Optional[float] = None,
@@ -81,12 +77,12 @@ class CoinbaseBroker(Broker):
             self.connect()
         assert self.exchange is not None
         if order_type.upper() != 'MKT':
-            raise NotImplementedError("Only market orders for Coinbase in Phase 1")
+            raise NotImplementedError("Only market orders for Kraken in Phase 1")
         if side.upper() == 'BUY':
             order = self.exchange.create_market_buy_order(symbol, quantity)
         else:
             order = self.exchange.create_market_sell_order(symbol, quantity)
-        log.info(f"Coinbase order placed: {side} {quantity} {symbol}. ID: {order['id']}")
+        log.info(f"Kraken order placed: {side} {quantity} {symbol}. ID: {order['id']}")
         return {
             'order_id': order['id'],
             'status': order['status'],

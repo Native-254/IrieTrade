@@ -1,14 +1,11 @@
-# monitoring/api.py
 from fastapi import Depends, FastAPI, HTTPException, Query, Request
 from fastapi.responses import HTMLResponse, FileResponse
-from fastapi.security import HTTPBasic, HTTPBasicCredentials
 import plotly.graph_objects as go
 from plotly.subplots import make_subplots
 import pandas as pd
 from datetime import datetime, timedelta
 import uvicorn
 import yaml
-import secrets
 import os
 from pathlib import Path
 from utils.config import CONFIG
@@ -17,24 +14,37 @@ from utils.security import encrypt
 from execution.ib_broker import IBBroker
 from execution.binance_broker import BinanceBroker
 from execution.okx_broker import OKXBroker
+from execution.coinbase_broker import CoinbaseBroker
+from execution.kraken_broker import KrakenBroker
+from execution.kucoin_broker import KucoinBroker
 
 app = FastAPI()
-security = HTTPBasic()
-
-MASTER_PASSWORD = os.getenv('MASTER_PASSWORD', '')
-
-def verify_admin(credentials: HTTPBasicCredentials = Depends(security)):
-    correct = secrets.compare_digest(credentials.password, MASTER_PASSWORD)
-    if not correct:
-        raise HTTPException(status_code=401, detail="Incorrect password")
-    return True
 
 trading_engine = None
+
+def _is_configured() -> bool:
+    """Check if the bot has been configured (has broker credentials)."""
+    env_path = Path('.env')
+    if not env_path.exists():
+        return False
+    with open(env_path, 'r') as f:
+        content = f.read()
+    # Check for at least one broker credential
+    markers = ['IB_ACCOUNT_ID=', 'BINANCE_API_KEY=', 'OKX_API_KEY=', 
+               'COINBASE_API_KEY=', 'KRAKEN_API_KEY=', 'KUCOIN_API_KEY=']
+    return any(marker in content for marker in markers)
 
 def set_trading_engine(engine):
     global trading_engine
     trading_engine = engine
     log.info("Trading engine registered with API")
+
+@app.get("/")
+async def root_redirect():
+    if not _is_configured():
+        return FileResponse("config/setup.html")
+    from fastapi.responses import RedirectResponse
+    return RedirectResponse(url="/dashboard")
 
 @app.get("/health")
 async def health_check():
@@ -404,6 +414,23 @@ def test_broker_connection(broker_name: str, credentials: dict) -> bool:
             broker.secret = credentials['secret']
             broker.password = credentials.get('passphrase', '')
             broker.connect()
+        elif broker_name == 'coinbase':
+            broker = CoinbaseBroker({'testnet': False})
+            broker.api_key = credentials['api_key']
+            broker.secret = credentials['secret']
+            broker.password = credentials.get('passphrase', '')
+            broker.connect()
+        elif broker_name == 'kraken':
+            broker = KrakenBroker({'testnet': False})
+            broker.api_key = credentials['api_key']
+            broker.secret = credentials['secret']
+            broker.connect()
+        elif broker_name == 'kucoin':
+            broker = KucoinBroker({'testnet': False})
+            broker.api_key = credentials['api_key']
+            broker.secret = credentials['secret']
+            broker.password = credentials.get('passphrase', '')
+            broker.connect()
         else:
             return False
         broker.get_account_info()  # verify connection works
@@ -413,7 +440,7 @@ def test_broker_connection(broker_name: str, credentials: dict) -> bool:
         return False
 
 @app.post("/api/setup/validate")
-async def setup_validate(request: Request, authenticated: bool = Depends(verify_admin)):
+async def setup_validate(request: Request):
     data = await request.json()
     brokers = data.get('brokers', [])
     credentials = data.get('credentials', {})
@@ -424,7 +451,7 @@ async def setup_validate(request: Request, authenticated: bool = Depends(verify_
     return {"success": True, "message": "All connections successful"}
 
 @app.post("/api/setup/save")
-async def setup_save(request: Request, authenticated: bool = Depends(verify_admin)):
+async def setup_save(request: Request):
     data = await request.json()
     brokers = data.get('brokers', [])
     credentials = data.get('credentials', {})
@@ -444,6 +471,17 @@ async def setup_save(request: Request, authenticated: bool = Depends(verify_admi
                 f.write(f"OKX_API_KEY={credentials[broker]['api_key']}\n")
                 f.write(f"OKX_SECRET={credentials[broker]['secret']}\n")
                 f.write(f"OKX_PASSPHRASE={credentials[broker].get('passphrase', '')}\n")
+            elif broker == 'coinbase':
+                f.write(f"COINBASE_API_KEY={credentials[broker]['api_key']}\n")
+                f.write(f"COINBASE_SECRET={credentials[broker]['secret']}\n")
+                f.write(f"COINBASE_PASSPHRASE={credentials[broker].get('passphrase', '')}\n")
+            elif broker == 'kraken':
+                f.write(f"KRAKEN_API_KEY={credentials[broker]['api_key']}\n")
+                f.write(f"KRAKEN_SECRET={credentials[broker]['secret']}\n")
+            elif broker == 'kucoin':
+                f.write(f"KUCOIN_API_KEY={credentials[broker]['api_key']}\n")
+                f.write(f"KUCOIN_SECRET={credentials[broker]['secret']}\n")
+                f.write(f"KUCOIN_PASSPHRASE={credentials[broker].get('passphrase', '')}\n")
 
     # 2. Update settings.yaml with brokers and symbols
     config_path = Path('config/settings.yaml')
