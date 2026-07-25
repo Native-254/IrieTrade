@@ -7,3 +7,4 @@ data/.encryption_key
 .env
 config/settings.yaml
 .qodo
+FIX_TODO.md

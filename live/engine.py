@@ -46,8 +46,12 @@ class TradingEngine:
         self.broker_last_logged_qty: Dict[str, Dict[str, int]] = {}
 
         for broker_name, broker in self.broker_manager.iterate_all():
-            account = broker.get_account_info()
-            capital = account['net_liquidation']
+            try:
+                account = broker.get_account_info()
+                capital = account['net_liquidation']
+            except Exception as e:
+                log.warning(f"Could not fetch account info for {broker_name}: {e}. Using default capital.")
+                capital = 100000.0
             pm = PositionManager()
             rm = RiskManager(capital, position_manager=pm)
             self.risk_managers[broker_name] = rm
@@ -441,7 +445,7 @@ class TradingEngine:
 
                 if (pos.side == 'BUY' and last_price <= pos.stop_loss) or \
                    (pos.side == 'SELL' and last_price >= pos.stop_loss):
-                    log.warning(f"Stop‑loss triggered for {sym} ({broker_name}). Broker will close.")
+                    log.warning(f"Stop-loss triggered for {sym} ({broker_name}). Broker will close.")
 
             self._reconcile_and_log_closed_positions(pm, last_logged_qty, latest_prices)
             self.broker_latest_prices[broker_name] = latest_prices
@@ -503,7 +507,7 @@ class TradingEngine:
                     reasons.append('ENTER_SHORT')
                 if exit_short:
                     reasons.append('EXIT_SHORT')
-                log.info(f"Resolved {symbol} ({broker_name}): {reasons} → {action}")
+                log.info(f"Resolved {symbol} ({broker_name}): {reasons} -> {action}")
 
                 atr = (df['high'] - df['low']).rolling(14).mean().iloc[-1]
                 vol_stop_mult = self.config['risk_management']['volatility_stop_multiplier']
@@ -539,7 +543,7 @@ class TradingEngine:
                 existing_notional = rm.get_position_notional(symbol, last_price)
                 new_single = existing_notional + proposed_notional
                 if new_single > max_single:
-                    log.warning(f"Single‑name limit for {symbol}")
+                    log.warning(f"Single-name limit for {symbol}")
                     continue
 
                 order_valid, msg = rm.validate_order(symbol, action, quantity, last_price, stop_loss)
@@ -624,7 +628,7 @@ class TradingEngine:
 
     def start(self):
         self.is_running = True
-        log.info(f"Starting {self.config['general']['bot_name']} Trading Bot (Multi‑Platform)…")
+        log.info(f"Starting {self.config['general']['bot_name']} Trading Bot (Multi-Platform)...")
 
         schedule.every().hour.at(":01").do(self.run_iteration)
         schedule.every().day.at("00:01").do(self._reset_daily_pnl)
