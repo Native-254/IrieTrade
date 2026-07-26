@@ -1,7 +1,10 @@
 # monitoring/email_alerter.py
 import os
+
 import requests
+
 from utils.logger import log
+
 
 class EmailAlerter:
     def __init__(self):
@@ -36,7 +39,7 @@ class EmailAlerter:
                 log.info(f"Email sent: {subject}")
             else:
                 log.error(f"Brevo failed: {resp.status_code} {resp.text}")
-        except Exception as e:
+        except Exception as e:  # noqa: BLE001
             log.error(f"Failed to send email via Brevo: {e}")
 
     def _build_signature(self) -> str:

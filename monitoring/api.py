@@ -1,22 +1,24 @@
-from fastapi import Depends, FastAPI, HTTPException, Query, Request
-from fastapi.responses import HTMLResponse, FileResponse
-import plotly.graph_objects as go
-from plotly.subplots import make_subplots
+# monitoring/api.py
+from datetime import datetime, timedelta, timezone
+from pathlib import Path
+
 import pandas as pd
-from datetime import datetime, timedelta
+import plotly.graph_objects as go
 import uvicorn
 import yaml
-import os
-from pathlib import Path
-from utils.config import CONFIG
-from utils.logger import log
-from utils.security import encrypt 
-from execution.ib_broker import IBBroker
+from fastapi import FastAPI, Query, Request
+from fastapi.responses import FileResponse, HTMLResponse
+from plotly.subplots import make_subplots
+
 from execution.binance_broker import BinanceBroker
-from execution.okx_broker import OKXBroker
 from execution.coinbase_broker import CoinbaseBroker
+from execution.ib_broker import IBBroker
 from execution.kraken_broker import KrakenBroker
 from execution.kucoin_broker import KucoinBroker
+from execution.okx_broker import OKXBroker
+from utils.config import CONFIG
+from utils.logger import log
+from utils.security import encrypt
 
 app = FastAPI()
 
@@ -27,10 +29,9 @@ def _is_configured() -> bool:
     env_path = Path('.env')
     if not env_path.exists():
         return False
-    with open(env_path, 'r') as f:
+    with open(env_path) as f:
         content = f.read()
-    # Check for at least one broker credential
-    markers = ['IB_ACCOUNT_ID=', 'BINANCE_API_KEY=', 'OKX_API_KEY=', 
+    markers = ['IB_ACCOUNT_ID=', 'BINANCE_API_KEY=', 'OKX_API_KEY=',
                'COINBASE_API_KEY=', 'KRAKEN_API_KEY=', 'KUCOIN_API_KEY=']
     return any(marker in content for marker in markers)
 
@@ -60,17 +61,18 @@ async def account_info():
             info = broker.get_account_info()
             broker.disconnect()
             return {"status": "success", "data": info}
-    except Exception:
+    except Exception:  # noqa: BLE001
         return {"status": "error", "message": "Internal error"}
 
 @app.get("/api/signals")
 async def api_signals(symbol: str = Query(..., description="Ticker symbol")):
     if not trading_engine:
         return {"error": "Engine not running"}
+    now_utc = datetime.now(timezone.utc)
     df = trading_engine.data_manager.get_data(
         symbol,
-        start_date=(datetime.now() - timedelta(days=7)).strftime('%Y-%m-%d'),
-        end_date=datetime.now().strftime('%Y-%m-%d'),
+        start_date=(now_utc - timedelta(days=7)).strftime('%Y-%m-%d'),
+        end_date=now_utc.strftime('%Y-%m-%d'),
         interval="15m", force_refresh=True)
     if df.empty:
         return {"error": "No data"}
@@ -162,7 +164,7 @@ async def dashboard():
     color_line = '#00b894' if total_return >= 0 else '#e17055'
     fig.add_trace(go.Scatter(
         x=df.index, y=df['nav'], mode='lines',
-        line=dict(color=color_line, width=2),
+        line={"color": color_line, "width": 2},
         fill='tozeroy',
         fillcolor='rgba(0, 184, 148, 0.1)' if total_return >= 0 else 'rgba(225, 112, 85, 0.1)',
         name='NAV'
@@ -170,10 +172,10 @@ async def dashboard():
     fig.update_layout(
         template='plotly_dark',
         title={'text': 'IrieTrade Equity Curve', 'x': 0.05, 'font': {'size': 24, 'family': 'Arial Black'}},
-        xaxis=dict(showgrid=False, zeroline=False),
-        yaxis=dict(title='Net Asset Value (USD)', showgrid=True, gridcolor='rgba(255,255,255,0.05)', zeroline=False),
+        xaxis={"showgrid": False, "zeroline": False},
+        yaxis={"title": "Net Asset Value (USD)", "showgrid": True, "gridcolor": "rgba(255,255,255,0.05)", "zeroline": False},
         paper_bgcolor='rgba(0,0,0,0)', plot_bgcolor='rgba(0,0,0,0)',
-        font=dict(color='#dfe6e9'), margin=dict(l=20, r=20, t=60, b=20), hovermode='x unified'
+        font={"color": "#dfe6e9"}, margin={"l": 20, "r": 20, "t": 60, "b": 20}, hovermode='x unified'
     )
     plot_html = fig.to_html(full_html=False, config={'responsive': True})
 
@@ -205,6 +207,8 @@ async def dashboard():
         recent_trades_html += "</ul>"
     else:
         recent_trades_html = "<p>No closed trades yet.</p>"
+
+    now_utc = datetime.now(timezone.utc)
 
     return HTMLResponse(f"""
     <!DOCTYPE html>
@@ -339,7 +343,7 @@ async def dashboard():
                         </div>
                         <div class="asset-card">
                             <h3>Latest refresh</h3>
-                            <div class="asset-value">{datetime.now().strftime('%H:%M:%S')}</div>
+                            <div class="asset-value">{now_utc.strftime('%H:%M:%S')}</div>
                             <div class="asset-change">Real-time dashboard snapshot</div>
                         </div>
                     </div>
@@ -433,10 +437,10 @@ def test_broker_connection(broker_name: str, credentials: dict) -> bool:
             broker.connect()
         else:
             return False
-        broker.get_account_info()  # verify connection works
+        broker.get_account_info()
         broker.disconnect()
         return True
-    except Exception:
+    except Exception:  # noqa: BLE001
         return False
 
 @app.post("/api/setup/validate")
@@ -459,7 +463,7 @@ async def setup_save(request: Request):
 
     # 1. Write .env file
     env_path = Path('.env')
-    with open(env_path, 'a') as f:
+    with open(env_path, 'a') as f:  # noqa: ASYNC230
         for broker in brokers:
             if broker == 'ib':
                 val = credentials[broker]['account_id']
@@ -485,12 +489,12 @@ async def setup_save(request: Request):
 
     # 2. Update settings.yaml with brokers and symbols
     config_path = Path('config/settings.yaml')
-    with open(config_path, 'r') as f:
+    with open(config_path) as f:  # noqa: ASYNC230
         config = yaml.safe_load(f)
     config['trading']['platforms'] = brokers
     config['trading']['platform'] = brokers[0]
     config['trading']['symbols'] = symbols
-    with open(config_path, 'w') as f:
+    with open(config_path, 'w') as f:  # noqa: ASYNC230
         yaml.dump(config, f)
 
     # 3. Signal the engine to restart with new config

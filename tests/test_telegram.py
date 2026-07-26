@@ -1,8 +1,10 @@
+# tests/test_telegram.py
 from dotenv import load_dotenv
+
 from monitoring.telegram_alerter import TelegramAlerter
 from utils.config import CONFIG
 
-load_dotenv(override=True)   # force reload and override any existing env vars
+load_dotenv(override=True)
 
 token = CONFIG['monitoring']['telegram']['bot_token']
 print(f"DEBUG: Bot token starts with: {token[:10]}... (length: {len(token)})")

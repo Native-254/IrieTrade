@@ -2,6 +2,7 @@
 from utils.config import CONFIG
 from utils.logger import log
 
+
 class RiskManager:
     def __init__(self, initial_capital: float, position_manager=None):
         self.config = CONFIG['risk_management']
@@ -38,7 +39,6 @@ class RiskManager:
         return True, "Order validated."
 
     def recalc_open_risk(self, latest_prices: dict):
-        """Recalculate total open risk from position manager using latest prices."""
         if not self.position_manager:
             return
         total_risk = 0.0
@@ -50,7 +50,6 @@ class RiskManager:
         log.debug(f"Recalculated open risk: {self.open_risk:.2f}")
 
     def get_gross_exposure(self, latest_prices: dict) -> float:
-        """Return total notional of all positions."""
         if not self.position_manager:
             return 0.0
         gross = 0.0
@@ -61,7 +60,6 @@ class RiskManager:
         return gross
 
     def get_position_notional(self, symbol: str, price: float) -> float:
-        """Return notional of a single position."""
         if not self.position_manager:
             return 0.0
         pos = self.position_manager.positions.get(symbol)
@@ -72,7 +70,6 @@ class RiskManager:
         return 0.0
 
     def get_net_exposure(self, latest_prices: dict) -> float:
-        """Return long_notional - short_notional, using latest market prices."""
         if not self.position_manager:
             return 0.0
         long_exp = 0.0

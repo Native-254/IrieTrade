@@ -1,10 +1,12 @@
 # backtest/engine.py
-import pandas as pd
-import numpy as np
-from typing import List, Dict, Optional
 from dataclasses import dataclass
+
+import numpy as np
+import pandas as pd
+
 from data.manager import DataManager
 from strategies.signals import Signal
+
 
 @dataclass
 class BacktestPosition:
@@ -13,10 +15,10 @@ class BacktestPosition:
     quantity: int
     entry_price: float
     stop_loss: float
-    take_profit: Optional[float] = None
+    take_profit: float | None = None
 
 class BacktestEngine:
-    def __init__(self, config: dict, strategies: List):
+    def __init__(self, config: dict, strategies: list):
         self.config = config
         self.strategies = strategies
         exec_cfg = config['execution']
@@ -153,8 +155,8 @@ class BacktestEngine:
 
         return pd.DataFrame(trades) if trades else pd.DataFrame()
 
-    def run(self, symbols: List[str], start_date: str, end_date: str,
-            initial_capital: float = 100000.0) -> Dict:
+    def run(self, symbols: list[str], start_date: str, end_date: str,
+            initial_capital: float = 100000.0) -> dict:
         results = {}
         for sym in symbols:
             trades = self.backtest_symbol(sym, start_date, end_date, initial_capital)

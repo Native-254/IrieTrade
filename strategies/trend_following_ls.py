@@ -1,9 +1,11 @@
 # strategies/trend_following_ls.py
 import pandas as pd
-from ta.trend import sma_indicator
 from ta.momentum import rsi as ta_rsi
+from ta.trend import sma_indicator
+
 from strategies.base import BaseStrategy
 from strategies.signals import Signal
+
 
 class TrendFollowingLS(BaseStrategy):
     """

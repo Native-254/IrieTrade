@@ -1,9 +1,11 @@
 # strategies/trend_following_long_only.py
 import pandas as pd
-from ta.trend import SMAIndicator
 from ta.momentum import RSIIndicator
+from ta.trend import SMAIndicator
+
 from strategies.base import BaseStrategy
 from strategies.signals import Signal
+
 
 class TrendFollowingLongOnly(BaseStrategy):
     """

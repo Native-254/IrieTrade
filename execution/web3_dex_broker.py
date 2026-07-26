@@ -1,8 +1,10 @@
 # execution/web3_dex_broker.py
 # Requires web3.py – install with: pip install web3
 import os
-from utils.logger import log
+
 from execution.broker import Broker
+from utils.logger import log
+
 
 class Web3DEXBroker(Broker):
     def __init__(self, config: dict):

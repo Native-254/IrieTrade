@@ -1,15 +1,17 @@
 # execution/ib_broker.py
 import time
-from ib_async import IB, Stock, MarketOrder, LimitOrder, StopOrder
-from typing import Dict, Any, Optional, Tuple
+
+from ib_async import IB, LimitOrder, MarketOrder, Stock, StopOrder
+
+from execution.broker import Broker
 from utils.config import CONFIG
 from utils.logger import log
-from execution.broker import Broker
+
 
 class IBBroker(Broker):
     def __init__(self):
         self.ib = IB()
-        self.config = CONFIG['exchanges']['ib']   # was 'nyse', now 'ib'
+        self.config = CONFIG['exchanges']['ib']
         self.connected = False
 
     def connect(self):
@@ -24,11 +26,11 @@ class IBBroker(Broker):
             )
             self.connected = True
             log.success(f"Connected to IBKR. Account: {self.config['account_id']}")
-        except Exception as e:
+        except Exception as e: 
             log.error(f"Failed to connect to IBKR: {e}")
             raise
 
-    def get_account_info(self) -> Dict[str, Any]:
+    def get_account_info(self) -> dict[str, object]:
         if not self.connected:
             self.connect()
         account_values = self.ib.accountValues(self.config['account_id'])
@@ -41,7 +43,7 @@ class IBBroker(Broker):
         }
 
     def place_order(self, symbol: str, side: str, quantity: int, order_type: str = 'MKT',
-                    limit_price: Optional[float] = None, stop_price: Optional[float] = None) -> Dict[str, Any]:
+                    limit_price: float | None = None, stop_price: float | None = None) -> dict[str, object]:
         if not self.connected:
             self.connect()
         contract = Stock(symbol, 'SMART', 'USD')
@@ -65,7 +67,7 @@ class IBBroker(Broker):
         }
 
     def place_bracket_short(self, symbol: str, quantity: int, entry_price: float,
-                            stop_price: float, take_profit: float) -> Tuple[Optional[int], Optional[int]]:
+                            stop_price: float, take_profit: float) -> tuple[int | None, int | None]:
         if not self.connected:
             self.connect()
         contract = Stock(symbol, 'SMART', 'USD')
@@ -89,7 +91,7 @@ class IBBroker(Broker):
         return parent_id, stop_id
 
     def place_bracket_long(self, symbol: str, quantity: int, entry_price: float,
-                           stop_price: float, take_profit: float) -> Tuple[Optional[int], Optional[int]]:
+                           stop_price: float, take_profit: float) -> tuple[int | None, int | None]:
         if not self.connected:
             self.connect()
         contract = Stock(symbol, 'SMART', 'USD')
@@ -118,7 +120,7 @@ class IBBroker(Broker):
                 return trade.order.orderId
         return 0
 
-    def update_stop_order(self, order_id: int, new_stop: float) -> Optional[int]:
+    def update_stop_order(self, order_id: int, new_stop: float) -> int | None:
         if not self.connected:
             self.connect()
         for trade in self.ib.trades():
@@ -175,7 +177,7 @@ class IBBroker(Broker):
                 return True
             log.warning(f"Short sale of {quantity} {symbol} not allowed or insufficient shares.")
             return False
-        except Exception as e:
+        except Exception as e:  # noqa: BLE001
             log.error(f"Shortable check failed for {symbol}: {e}")
             return False
 

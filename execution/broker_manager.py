@@ -1,10 +1,11 @@
 # execution/broker_manager.py
-from execution.ib_broker import IBBroker
 from execution.binance_broker import BinanceBroker
-from execution.okx_broker import OKXBroker
 from execution.coinbase_broker import CoinbaseBroker
+from execution.ib_broker import IBBroker
 from execution.kraken_broker import KrakenBroker
 from execution.kucoin_broker import KucoinBroker
+from execution.okx_broker import OKXBroker
+
 
 class BrokerManager:
     def __init__(self, config):
@@ -32,5 +33,4 @@ class BrokerManager:
             raise ValueError("No trading platform enabled. Check config.")
 
     def iterate_all(self):
-        for name, broker in self.brokers.items():
-            yield name, broker
+        yield from self.brokers.items()

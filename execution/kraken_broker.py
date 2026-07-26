@@ -1,9 +1,11 @@
-import ccxt
+# execution/kraken_broker.py
 import os
 import time
-from typing import Dict, Any, Optional, Tuple
-from utils.logger import log
+
+import ccxt
+
 from execution.broker import Broker
+from utils.logger import log
 
 
 class KrakenBroker(Broker):
@@ -27,8 +29,6 @@ class KrakenBroker(Broker):
             'enableRateLimit': True,
         }
         if self.testnet:
-            # Kraken does not have a public sandbox; we use the live API but
-            # restrict to paper-only usage via configuration.
             params['urls'] = {
                 'api': {
                     'public': 'https://api.kraken.com',
@@ -43,7 +43,7 @@ class KrakenBroker(Broker):
     def disconnect(self):
         self.connected = False
 
-    def get_account_info(self) -> Dict[str, Any]:
+    def get_account_info(self) -> dict[str, object]:
         if not self.connected:
             self.connect()
         assert self.exchange is not None
@@ -57,22 +57,19 @@ class KrakenBroker(Broker):
             if asset in ('USD', 'USDT', 'USDC'):
                 usd_value += amt
             else:
-                try:
-                    ticker = self.exchange.fetch_ticker(f'{asset}/USD')
-                    last_price = float(str(ticker['last'])) if ticker.get('last') else 0.0
-                    usd_value += amt * last_price
-                except Exception:
+                for quote in ('USD', 'USDT'):
                     try:
-                        ticker = self.exchange.fetch_ticker(f'{asset}/USDT')
+                        ticker = self.exchange.fetch_ticker(f'{asset}/{quote}')
                         last_price = float(str(ticker['last'])) if ticker.get('last') else 0.0
                         usd_value += amt * last_price
-                    except Exception:
-                        pass
+                        break
+                    except Exception:  # noqa: BLE001, S112
+                        continue
         return {'net_liquidation': usd_value, 'account': 'Kraken', 'unrealized_pnl': 0.0}
 
     def place_order(self, symbol: str, side: str, quantity: float,
-                    order_type: str = 'MKT', limit_price: Optional[float] = None,
-                    stop_price: Optional[float] = None) -> Dict[str, Any]:
+                    order_type: str = 'MKT', limit_price: float | None = None,
+                    stop_price: float | None = None) -> dict[str, object]:
         if not self.connected:
             self.connect()
         assert self.exchange is not None
@@ -91,17 +88,17 @@ class KrakenBroker(Broker):
         }
 
     def place_bracket_long(self, symbol: str, quantity: float, entry_price: float,
-                           stop_price: float, take_profit: float) -> Tuple[Optional[int], Optional[int]]:
+                           stop_price: float, take_profit: float) -> tuple[int | None, int | None]:
         raise NotImplementedError
 
     def place_bracket_short(self, symbol: str, quantity: float, entry_price: float,
-                            stop_price: float, take_profit: float) -> Tuple[Optional[int], Optional[int]]:
+                            stop_price: float, take_profit: float) -> tuple[int | None, int | None]:
         raise NotImplementedError
 
     def get_stop_order_id(self, parent_id: int) -> int:
         return 0
 
-    def update_stop_order(self, order_id: int, new_stop: float) -> Optional[int]:
+    def update_stop_order(self, order_id: int, new_stop: float) -> int | None:
         return None
 
     def cancel_order(self, order_id: str) -> bool:
@@ -111,7 +108,7 @@ class KrakenBroker(Broker):
         try:
             self.exchange.cancel_order(order_id, symbol=None)
             return True
-        except Exception as e:
+        except Exception as e:  # noqa: BLE001
             log.error(f"Failed to cancel order {order_id}: {e}")
             return False
 
@@ -142,8 +139,7 @@ class KrakenBroker(Broker):
                     return {'filled': order['filled'], 'avg_price': order['average'], 'status': 'Filled'}
                 elif order['status'] in ('canceled', 'expired'):
                     return {'filled': 0, 'status': 'Cancelled'}
-            except Exception:
+            except Exception:  # noqa: BLE001, S110
                 pass
             time.sleep(1)
         return {'filled': 0, 'status': 'Timeout'}
-

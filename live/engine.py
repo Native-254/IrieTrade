@@ -1,33 +1,32 @@
-# live/engine.py
 import csv
 import os
-import time
-import schedule
 import threading
+import time
+from datetime import datetime, timedelta, timezone
+
 import numpy as np
+import schedule
 import uvicorn
 import yfinance as yf
-from datetime import datetime, timedelta
-from typing import List, Optional, Tuple, Dict
 
-from utils.config import CONFIG
-from utils.logger import log
 from data.manager import DataManager
-from strategies.trend_following import TrendFollowingLS
-from strategies.trend_following_long_only import TrendFollowingLongOnly
-from strategies.mean_revisions import MeanReversion
-from strategies.signals import Signal
-
-from risk.manager import RiskManager
-from risk.position_manager import PositionManager, Position
 from execution.broker_manager import BrokerManager
-from monitoring.telegram_alerter import TelegramAlerter
+from monitoring.api import app as api_app, set_trading_engine
 from monitoring.discord_alerter import DiscordAlerter
 from monitoring.email_alerter import EmailAlerter
-from monitoring.api import app as api_app, set_trading_engine
+from monitoring.telegram_alerter import TelegramAlerter
+from risk.manager import RiskManager
+from risk.position_manager import Position, PositionManager
+from strategies.mean_revisions import MeanReversion
+from strategies.signals import Signal
+from strategies.trend_following_long_only import TrendFollowingLongOnly
+from strategies.trend_following_ls import TrendFollowingLS
+from utils.config import CONFIG
+from utils.logger import log
+
 
 class TradingEngine:
-    def __init__(self, config: Optional[dict] = None):
+    def __init__(self, config: dict | None = None):
         log.info("Initializing Trading Engine…")
         self.config = config or CONFIG
         self.data_manager = DataManager()
@@ -39,17 +38,17 @@ class TradingEngine:
         self.email = EmailAlerter()
 
         # ---------- Per‑broker resources ----------
-        self.risk_managers: Dict[str, RiskManager] = {}
-        self.position_managers: Dict[str, PositionManager] = {}
-        self.symbols_by_broker: Dict[str, List[str]] = {}
-        self.broker_latest_prices: Dict[str, dict] = {}
-        self.broker_last_logged_qty: Dict[str, Dict[str, int]] = {}
+        self.risk_managers: dict[str, RiskManager] = {}
+        self.position_managers: dict[str, PositionManager] = {}
+        self.symbols_by_broker: dict[str, list[str]] = {}
+        self.broker_latest_prices: dict[str, dict] = {}
+        self.broker_last_logged_qty: dict[str, dict[str, int]] = {}
 
         for broker_name, broker in self.broker_manager.iterate_all():
             try:
                 account = broker.get_account_info()
                 capital = account['net_liquidation']
-            except Exception as e:
+            except Exception as e:  # noqa: BLE001
                 log.warning(f"Could not fetch account info for {broker_name}: {e}. Using default capital.")
                 capital = 100000.0
             pm = PositionManager()
@@ -64,8 +63,8 @@ class TradingEngine:
             self.broker_latest_prices[broker_name] = {}
             self.broker_last_logged_qty[broker_name] = {}
 
-        self.trade_results: List[Tuple[str, float]] = []
-        self.equity_history: List[Tuple[datetime, float]] = []
+        self.trade_results: list[tuple[str, float]] = []
+        self.equity_history: list[tuple[datetime, float]] = []
         self.unrealized_pnl: float = 0.0
         self.realized_pnl: float = 0.0
 
@@ -102,37 +101,25 @@ class TradingEngine:
     def _teardown(self):
         """Cleanly tear down all engine resources before re-initialising."""
         log.info("Tearing down engine resources…")
-        # 1. Disconnect all brokers
         for broker_name, broker in self.broker_manager.iterate_all():
             try:
                 broker.disconnect()
                 log.info(f"Disconnected broker: {broker_name}")
-            except Exception as e:
+            except Exception as e:  # noqa: BLE001
                 log.warning(f"Error disconnecting broker {broker_name}: {e}")
 
-        # 2. Clear all position managers & risk managers
         self.position_managers.clear()
         self.risk_managers.clear()
-
-        # 3. Clear all schedule jobs (prevents stale jobs from firing)
         schedule.clear()
-
-        # 4. Stop the engine loop
         self.is_running = False
-
-        # 5. Clear accumulated trade and equity history
         self.trade_results.clear()
         self.equity_history.clear()
-
-        # 6. Clear per‑broker state
         self.symbols_by_broker.clear()
         self.broker_latest_prices.clear()
         self.broker_last_logged_qty.clear()
-
         log.info("Teardown complete. Engine is clean.")
 
     def restart_with_new_config(self, new_config):
-        """Re‑initialise the engine with a fresh config (called after setup)."""
         log.info("Restarting engine with new configuration…")
         self._teardown()
         self.__init__(config=new_config)
@@ -157,14 +144,14 @@ class TradingEngine:
 
     def _log_trade(self, symbol, action, quantity, entry_price, exit_price, pnl, side, strategy_name=''):
         filepath = 'logs/trades.csv'
-        headers = ['timestamp','symbol','action','quantity','entry_price','exit_price','pnl','side','strategy']
+        headers = ['timestamp', 'symbol', 'action', 'quantity', 'entry_price', 'exit_price', 'pnl', 'side', 'strategy']
         write_header = not os.path.exists(filepath)
         with open(filepath, 'a', newline='') as f:
             writer = csv.DictWriter(f, fieldnames=headers)
             if write_header:
                 writer.writeheader()
             writer.writerow({
-                'timestamp': datetime.now().isoformat(),
+                'timestamp': datetime.now(timezone.utc).isoformat(),
                 'symbol': symbol, 'action': action, 'quantity': quantity,
                 'entry_price': entry_price, 'exit_price': exit_price, 'pnl': pnl,
                 'side': side, 'strategy': strategy_name
@@ -191,9 +178,10 @@ class TradingEngine:
             ed = ticker.earnings_dates
             if ed is not None and not ed.empty:
                 next_earnings = ed.index[0].to_pydatetime()
-                days_until = (next_earnings - datetime.now()).days
+                now_utc = datetime.now(timezone.utc)
+                days_until = (next_earnings.replace(tzinfo=timezone.utc) - now_utc).days
                 return 0 <= days_until <= self.config['execution'].get('earnings_avoidance_days', 5)
-        except Exception as e:
+        except Exception as e:  # noqa: BLE001
             log.debug(f"Could not fetch earnings for {symbol}: {e}")
         return False
 
@@ -283,7 +271,7 @@ class TradingEngine:
                     pm.open_position(Position(
                         symbol=symbol, side='BUY' if action == 'BUY' else 'SELL',
                         quantity=filled_qty, entry_price=net_entry_price,
-                        stop_loss=stop_loss_slipped, stop_order_id=safe_stop_id, entry_time=datetime.now()
+                        stop_loss=stop_loss_slipped, stop_order_id=safe_stop_id, entry_time=datetime.now(timezone.utc)
                     ))
                     self.email.send_trade_alert(symbol, action, filled_qty, avg_price)
                     log.success(f"Filled {action} {filled_qty} {symbol} @ ${avg_price:.2f} (bracket)")
@@ -292,7 +280,7 @@ class TradingEngine:
                 except NotImplementedError:
                     log.warning("Bracket orders not supported, falling back to plain order")
                     use_bracket = False
-                except Exception as e:
+                except Exception as e:  # noqa: BLE001
                     log.exception(f"Entry execution error for {symbol}: {e}")
                     self.email.send_error_alert(f"Trade failed for {symbol}: {e}")
                     return False
@@ -322,13 +310,13 @@ class TradingEngine:
                     pm.open_position(Position(
                         symbol=symbol, side='BUY' if action == 'BUY' else 'SELL',
                         quantity=filled_qty, entry_price=net_entry_price,
-                        stop_loss=stop_loss, stop_order_id=0, entry_time=datetime.now()
+                        stop_loss=stop_loss, stop_order_id=0, entry_time=datetime.now(timezone.utc)
                     ))
                     self.email.send_trade_alert(symbol, action, filled_qty, avg_price)
                     log.success(f"Filled {action} {filled_qty} {symbol} @ ${avg_price:.2f} (plain)")
                     return True
 
-                except Exception as e:
+                except Exception as e:  # noqa: BLE001
                     log.exception(f"Entry error for {symbol}: {e}")
                     self.email.send_error_alert(f"Trade failed for {symbol}: {e}")
                     return False
@@ -380,7 +368,7 @@ class TradingEngine:
                 log.success(f"Closed {action} {filled_qty} {symbol} @ ${avg_price:.2f}, P&L {pnl_frac:.4%}")
                 return True
 
-            except Exception as e:
+            except Exception as e:  # noqa: BLE001
                 log.exception(f"Exit execution error for {symbol}: {e}")
                 self.email.send_error_alert(f"Trade failed for {symbol}: {e}")
                 return False
@@ -419,10 +407,11 @@ class TradingEngine:
             latest_prices = {}
 
             # Trailing stops & price collection
+            now_utc = datetime.now(timezone.utc)
             for sym, pos in pm.positions.items():
                 df = self.data_manager.get_data(sym,
-                                                start_date=(datetime.now() - timedelta(days=1)).strftime('%Y-%m-%d'),
-                                                end_date=datetime.now().strftime('%Y-%m-%d'),
+                                                start_date=(now_utc - timedelta(days=1)).strftime('%Y-%m-%d'),
+                                                end_date=now_utc.strftime('%Y-%m-%d'),
                                                 interval="15m", force_refresh=True)
                 if df.empty:
                     continue
@@ -457,8 +446,8 @@ class TradingEngine:
                     continue
 
                 df = self.data_manager.get_data(symbol,
-                                                start_date=(datetime.now() - timedelta(days=7)).strftime('%Y-%m-%d'),
-                                                end_date=datetime.now().strftime('%Y-%m-%d'),
+                                                start_date=(now_utc - timedelta(days=7)).strftime('%Y-%m-%d'),
+                                                end_date=now_utc.strftime('%Y-%m-%d'),
                                                 interval="15m", force_refresh=True)
                 if df.empty:
                     continue
@@ -530,7 +519,6 @@ class TradingEngine:
                 if quantity == 0:
                     continue
 
-                # Risk checks
                 proposed_notional = quantity * last_price
                 current_gross = rm.get_gross_exposure(latest_prices)
                 new_gross = current_gross + proposed_notional
@@ -567,7 +555,7 @@ class TradingEngine:
 
             combined_nav += capital
 
-        self.equity_history.append((datetime.now(), combined_nav))
+        self.equity_history.append((datetime.now(timezone.utc), combined_nav))
         self.latest_prices = all_latest_prices
 
     # ------------------------------------------------------------------
@@ -598,7 +586,7 @@ class TradingEngine:
                     pos = pm.positions[sym]
                     pos.quantity = abs(qty)
                     pos.entry_price = avg_cost
-        except Exception as e:
+        except Exception as e:  # noqa: BLE001
             log.error(f"Position sync failed: {e}")
 
     def _reconcile_and_log_closed_positions(self, pm, last_logged_qty, latest_prices):
@@ -651,6 +639,7 @@ class TradingEngine:
     def _reset_daily_pnl(self):
         for rm in self.risk_managers.values():
             rm.reset_daily_pnl()
+
 
 if __name__ == "__main__":
     engine = TradingEngine()

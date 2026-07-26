@@ -1,4 +1,6 @@
+# strategies/signals.py
 from enum import Enum
+
 
 class Signal(Enum):
     ENTER_LONG = 'ENTER_LONG'

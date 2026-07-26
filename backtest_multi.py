@@ -1,9 +1,12 @@
+import sys
+
 import pandas as pd
 import vectorbt as vbt
+
 from data.manager import DataManager
-from strategies.trend_following import TrendFollowingLS
 from strategies.mean_revisions import MeanReversion
 from strategies.signals import Signal
+from strategies.trend_following_ls import TrendFollowingLS
 
 symbols = [
     'AAPL', 'MSFT', 'GOOGL', 'TSLA', 'NVDA', 'AMZN', 'META', 'JPM', 'V', 'MA', 'PG', 'DIS', 'HD', 'BAC', 'VZ',
@@ -65,7 +68,7 @@ for symbol in symbols:
 
 if not all_results:
     print("No backtest results available.")
-    exit(1)
+    sys.exit(1)
 
 agg = pd.concat(all_results, axis=1).transpose()
 print("\n=== Backtest Summary ===")

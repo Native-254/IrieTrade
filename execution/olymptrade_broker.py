@@ -1,10 +1,12 @@
 # execution/olymptrade_broker.py
-import requests
-import time
 import os
-from typing import Dict, Any, Optional
-from utils.logger import log
+import time
+
+import requests
+
 from execution.broker import Broker
+from utils.logger import log
+
 
 class OlympTradeBroker(Broker):
     def __init__(self, config: dict):
@@ -23,7 +25,7 @@ class OlympTradeBroker(Broker):
     def disconnect(self):
         self.connected = False
 
-    def get_account_info(self) -> Dict[str, Any]:
+    def get_account_info(self) -> dict[str, object]:
         if not self.connected:
             self.connect()
         resp = self.session.get(f'{self.base_url}/account')
@@ -37,8 +39,8 @@ class OlympTradeBroker(Broker):
         return {'net_liquidation': 0.0, 'account': 'OlympTrade', 'unrealized_pnl': 0.0}
 
     def place_order(self, symbol: str, side: str, quantity: float,
-                    order_type: str = 'MKT', limit_price: Optional[float] = None,
-                    stop_price: Optional[float] = None) -> Dict[str, Any]:
+                    order_type: str = 'MKT', limit_price: float | None = None,
+                    stop_price: float | None = None) -> dict[str, object]:
         if not self.connected:
             self.connect()
         payload = {
@@ -71,10 +73,23 @@ class OlympTradeBroker(Broker):
             time.sleep(1)
         return {'filled': 0, 'status': 'Timeout'}
 
-    def place_bracket_long(self, *args): raise NotImplementedError
-    def place_bracket_short(self, *args): raise NotImplementedError
-    def get_stop_order_id(self, parent_id): return 0
-    def update_stop_order(self, order_id, new_stop): return None
-    def cancel_order(self, order_id) -> bool: return False
-    def get_positions(self) -> list: return []
-    def is_shortable(self, symbol, quantity) -> bool: return False
+    def place_bracket_long(self, *args):
+        raise NotImplementedError
+
+    def place_bracket_short(self, *args):
+        raise NotImplementedError
+
+    def get_stop_order_id(self, parent_id: int) -> int:
+        return 0
+
+    def update_stop_order(self, order_id: int, new_stop: float) -> int | None:
+        return None
+
+    def cancel_order(self, order_id: str) -> bool:
+        return False
+
+    def get_positions(self) -> list:
+        return []
+
+    def is_shortable(self, symbol: str, quantity: float) -> bool:
+        return False

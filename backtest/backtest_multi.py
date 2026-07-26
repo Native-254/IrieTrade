@@ -1,8 +1,8 @@
-# backtest_multi.py
+# backtest/backtest_multi.py
 from backtest.engine import BacktestEngine
-from strategies.trend_following import TrendFollowingLS
 from strategies.mean_revisions import MeanReversion
 from strategies.trend_following_long_only import TrendFollowingLongOnly
+from strategies.trend_following_ls import TrendFollowingLS
 from utils.config import CONFIG
 
 config = CONFIG

@@ -1,7 +1,7 @@
 # risk/position_manager.py
 from dataclasses import dataclass
-from typing import Dict, Optional
 from datetime import datetime
+
 
 @dataclass
 class Position:
@@ -10,19 +10,20 @@ class Position:
     quantity: int
     entry_price: float
     stop_loss: float
-    take_profit: Optional[float] = None
+    take_profit: float | None = None
     stop_order_id: int = 0
     tp_order_id: int = 0
-    entry_time: Optional[datetime] = None
+    entry_time: datetime | None = None
+
 
 class PositionManager:
     def __init__(self):
-        self.positions: Dict[str, Position] = {}
+        self.positions: dict[str, Position] = {}
 
     def has_position(self, symbol: str) -> bool:
         return symbol in self.positions
 
-    def get_side(self, symbol: str) -> Optional[str]:
+    def get_side(self, symbol: str) -> str | None:
         pos = self.positions.get(symbol)
         return pos.side if pos else None
 
@@ -32,5 +33,5 @@ class PositionManager:
     def close_position(self, symbol: str):
         self.positions.pop(symbol, None)
 
-    def get_all_positions(self) -> Dict[str, Position]:
+    def get_all_positions(self) -> dict[str, Position]:
         return self.positions

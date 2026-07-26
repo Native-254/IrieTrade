@@ -1,7 +1,9 @@
 # monitoring/telegram_alerter.py
 import requests
+
 from utils.config import CONFIG
 from utils.logger import log
+
 
 class TelegramAlerter:
     def __init__(self):
@@ -22,7 +24,7 @@ class TelegramAlerter:
             response = requests.post(url, json=payload, timeout=10)
             response.raise_for_status()
             log.debug(f"Telegram alert sent: {message[:50]}...")
-        except Exception as e:
+        except Exception as e:  # noqa: BLE001
             log.error(f"Failed to send Telegram alert: {e}")
 
     def send_trade_alert(self, symbol: str, action: str, quantity: int, price: float):
