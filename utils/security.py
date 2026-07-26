@@ -6,7 +6,7 @@ from cryptography.fernet import Fernet
 
 
 def _get_or_create_key() -> bytes:
-    key_path = Path('data/.encryption_key')
+    key_path = Path("data/.encryption_key")
     if key_path.exists():
         return key_path.read_bytes()
     key = Fernet.generate_key()

@@ -23,11 +23,11 @@ def test_drawdown_limit():
 
 def test_validate_order():
     rm = RiskManager(100000.0)
-    valid, _msg = rm.validate_order('AAPL', 'BUY', 100, 100.0, 99.0)
+    valid, _msg = rm.validate_order("AAPL", "BUY", 100, 100.0, 99.0)
     assert valid is True
 
 
 def test_excessive_risk():
     rm = RiskManager(100000.0)
-    valid, _msg = rm.validate_order('AAPL', 'BUY', 100000, 100.0, 90.0)
+    valid, _msg = rm.validate_order("AAPL", "BUY", 100000, 100.0, 90.0)
     assert valid is False

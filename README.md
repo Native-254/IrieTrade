@@ -207,13 +207,14 @@ To evaluate a single strategy before live use:
 
 ```python
 from backtest.engine import BacktestEngine
+
 engine = BacktestEngine()
 results = engine.run_backtest(
-    strategy_name='TrendFollowing',
-    symbol='AAPL',
-    start_date='2020-01-01',
-    end_date='2024-01-01',
-    strategy_params={'fast_ma': 20, 'slow_ma': 50}
+    strategy_name="TrendFollowing",
+    symbol="AAPL",
+    start_date="2020-01-01",
+    end_date="2024-01-01",
+    strategy_params={"fast_ma": 20, "slow_ma": 50},
 )
 print(results)
 ```

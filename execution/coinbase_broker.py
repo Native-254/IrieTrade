@@ -13,10 +13,10 @@ class CoinbaseBroker(Broker):
 
     def __init__(self, config: dict):
         self.config = config
-        self.api_key = os.getenv('COINBASE_API_KEY', '')
-        self.secret = os.getenv('COINBASE_SECRET', '')
-        self.password = os.getenv('COINBASE_PASSPHRASE', '')
-        self.testnet = self.config.get('testnet', True)
+        self.api_key = os.getenv("COINBASE_API_KEY", "")
+        self.secret = os.getenv("COINBASE_SECRET", "")
+        self.password = os.getenv("COINBASE_PASSPHRASE", "")
+        self.testnet = self.config.get("testnet", True)
         self.exchange = None
         self.connected = False
         self.supports_bracket = False
@@ -25,16 +25,16 @@ class CoinbaseBroker(Broker):
         if self.connected:
             return
         params = {
-            'apiKey': self.api_key,
-            'secret': self.secret,
-            'password': self.password,
-            'enableRateLimit': True,
+            "apiKey": self.api_key,
+            "secret": self.secret,
+            "password": self.password,
+            "enableRateLimit": True,
         }
         if self.testnet:
-            params['urls'] = {
-                'api': {
-                    'public': 'https://api-sandbox.coinbase.com',
-                    'private': 'https://api-sandbox.coinbase.com',
+            params["urls"] = {
+                "api": {
+                    "public": "https://api-sandbox.coinbase.com",
+                    "private": "https://api-sandbox.coinbase.com",
                 }
             }
         self.exchange = ccxt.coinbase(params)  # type: ignore[arg-type]
@@ -50,52 +50,78 @@ class CoinbaseBroker(Broker):
             self.connect()
         assert self.exchange is not None
         balance = self.exchange.fetch_balance()
-        total = balance.get('total', {})
+        total = balance.get("total", {})
         usd_value = 0.0
         for asset, amount in total.items():
             amt = float(str(amount)) if amount else 0.0
             if amt == 0.0:
                 continue
             # Try multiple quote assets in order of preference
-            if asset in ('USD', 'USDT', 'USDC'):
+            if asset in ("USD", "USDT", "USDC"):
                 usd_value += amt
             else:
-                for quote in ('USD', 'USDT'):
+                for quote in ("USD", "USDT"):
                     try:
-                        ticker = self.exchange.fetch_ticker(f'{asset}/{quote}')
-                        last_price = float(str(ticker['last'])) if ticker.get('last') else 0.0
+                        ticker = self.exchange.fetch_ticker(f"{asset}/{quote}")
+                        last_price = (
+                            float(str(ticker["last"])) if ticker.get("last") else 0.0
+                        )
                         usd_value += amt * last_price
                         break
                     except Exception:  # noqa: BLE001, S112
                         continue
-        return {'net_liquidation': usd_value, 'account': 'Coinbase', 'unrealized_pnl': 0.0}
+        return {
+            "net_liquidation": usd_value,
+            "account": "Coinbase",
+            "unrealized_pnl": 0.0,
+        }
 
-    def place_order(self, symbol: str, side: str, quantity: float,
-                    order_type: str = 'MKT', limit_price: float | None = None,
-                    stop_price: float | None = None) -> dict[str, object]:
+    def place_order(
+        self,
+        symbol: str,
+        side: str,
+        quantity: float,
+        order_type: str = "MKT",
+        limit_price: float | None = None,
+        stop_price: float | None = None,
+    ) -> dict[str, object]:
         if not self.connected:
             self.connect()
         assert self.exchange is not None
-        if order_type.upper() != 'MKT':
+        if order_type.upper() != "MKT":
             raise NotImplementedError("Only market orders for Coinbase in Phase 1")
-        if side.upper() == 'BUY':
+        if side.upper() == "BUY":
             order = self.exchange.create_market_buy_order(symbol, quantity)
         else:
             order = self.exchange.create_market_sell_order(symbol, quantity)
-        log.info(f"Coinbase order placed: {side} {quantity} {symbol}. ID: {order['id']}")
+        log.info(
+            f"Coinbase order placed: {side} {quantity} {symbol}. ID: {order['id']}"
+        )
         return {
-            'order_id': order['id'],
-            'status': order['status'],
-            'filled_quantity': order['filled'],
-            'avg_price': order['average'],
+            "order_id": order["id"],
+            "status": order["status"],
+            "filled_quantity": order["filled"],
+            "avg_price": order["average"],
         }
 
-    def place_bracket_long(self, symbol: str, quantity: float, entry_price: float,
-                           stop_price: float, take_profit: float) -> tuple[int | None, int | None]:
+    def place_bracket_long(
+        self,
+        symbol: str,
+        quantity: float,
+        entry_price: float,
+        stop_price: float,
+        take_profit: float,
+    ) -> tuple[int | None, int | None]:
         raise NotImplementedError
 
-    def place_bracket_short(self, symbol: str, quantity: float, entry_price: float,
-                            stop_price: float, take_profit: float) -> tuple[int | None, int | None]:
+    def place_bracket_short(
+        self,
+        symbol: str,
+        quantity: float,
+        entry_price: float,
+        stop_price: float,
+        take_profit: float,
+    ) -> tuple[int | None, int | None]:
         raise NotImplementedError
 
     def get_stop_order_id(self, parent_id: int) -> int:
@@ -121,10 +147,17 @@ class CoinbaseBroker(Broker):
         assert self.exchange is not None
         balance = self.exchange.fetch_balance()
         positions = []
-        for asset, amount in balance['total'].items():
+        for asset, amount in balance["total"].items():
             amt = float(str(amount)) if amount else 0.0
             if amt > 0.0:
-                positions.append({'symbol': asset, 'quantity': amt, 'avg_cost': 0.0, 'market_value': 0.0})
+                positions.append(
+                    {
+                        "symbol": asset,
+                        "quantity": amt,
+                        "avg_cost": 0.0,
+                        "market_value": 0.0,
+                    }
+                )
         return positions
 
     def is_shortable(self, symbol: str, quantity: float) -> bool:
@@ -138,11 +171,15 @@ class CoinbaseBroker(Broker):
         while time.time() - start < timeout:
             try:
                 order = self.exchange.fetch_order(str(order_id), symbol=None)
-                if order['status'] == 'closed':
-                    return {'filled': order['filled'], 'avg_price': order['average'], 'status': 'Filled'}
-                elif order['status'] in ('canceled', 'expired'):
-                    return {'filled': 0, 'status': 'Cancelled'}
+                if order["status"] == "closed":
+                    return {
+                        "filled": order["filled"],
+                        "avg_price": order["average"],
+                        "status": "Filled",
+                    }
+                elif order["status"] in ("canceled", "expired"):
+                    return {"filled": 0, "status": "Cancelled"}
             except Exception:  # noqa: BLE001, S110
                 pass
             time.sleep(1)
-        return {'filled': 0, 'status': 'Timeout'}
+        return {"filled": 0, "status": "Timeout"}

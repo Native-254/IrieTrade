@@ -7,10 +7,10 @@ from utils.logger import log
 
 class DiscordAlerter:
     def __init__(self):
-        self.config = CONFIG['monitoring']['discord']
-        self.enabled = self.config['enabled']
+        self.config = CONFIG["monitoring"]["discord"]
+        self.enabled = self.config["enabled"]
         if self.enabled:
-            self.webhook_url = self.config['webhook_url']
+            self.webhook_url = self.config["webhook_url"]
             log.info("Discord alerter initialized.")
 
     def send_message(self, message: str):
@@ -19,14 +19,20 @@ class DiscordAlerter:
             return
 
         try:
-            payload = {'content': message}
+            payload = {"content": message}
             response = requests.post(self.webhook_url, json=payload, timeout=10)
             response.raise_for_status()
             log.debug(f"Discord alert sent: {message[:50]}...")
         except Exception as e:  # noqa: BLE001
             log.error(f"Failed to send Discord alert: {e}")
 
-    def send_embed(self, title: str, description: str, color: int = 0x00ff00, fields: dict | None = None):
+    def send_embed(
+        self,
+        title: str,
+        description: str,
+        color: int = 0x00FF00,
+        fields: dict | None = None,
+    ):
         """
         Sends a rich embed message (looks nicer for trade alerts).
         Color: 0x00ff00 (green) for buy, 0xff0000 (red) for sell, 0xffa500 (orange) for error.
@@ -35,15 +41,17 @@ class DiscordAlerter:
             return
 
         embed = {
-            'title': title,
-            'description': description,
-            'color': color,
-            'timestamp': None
+            "title": title,
+            "description": description,
+            "color": color,
+            "timestamp": None,
         }
         if fields:
-            embed['fields'] = [{'name': k, 'value': str(v), 'inline': True} for k, v in fields.items()]
+            embed["fields"] = [
+                {"name": k, "value": str(v), "inline": True} for k, v in fields.items()
+            ]
 
-        payload = {'embeds': [embed]}
+        payload = {"embeds": [embed]}
         try:
             response = requests.post(self.webhook_url, json=payload, timeout=10)
             response.raise_for_status()
@@ -56,26 +64,22 @@ class DiscordAlerter:
         if not self.enabled:
             return
 
-        color = 0x00ff00 if action.upper() == 'BUY' else 0xff0000
+        color = 0x00FF00 if action.upper() == "BUY" else 0xFF0000
         fields = {
-            'Symbol': symbol,
-            'Action': action.upper(),
-            'Quantity': quantity,
-            'Price': f"${price:.2f}"
+            "Symbol": symbol,
+            "Action": action.upper(),
+            "Quantity": quantity,
+            "Price": f"${price:.2f}",
         }
         self.send_embed(
             title="🚨 Trade Executed",
             description=f"{action.upper()} order filled.",
             color=color,
-            fields=fields
+            fields=fields,
         )
 
     def send_error_alert(self, error_message: str):
         """Sends an error alert as an embed."""
         if not self.enabled:
             return
-        self.send_embed(
-            title="⚠️ Bot Error",
-            description=error_message,
-            color=0xffa500
-        )
+        self.send_embed(title="⚠️ Bot Error", description=error_message, color=0xFFA500)

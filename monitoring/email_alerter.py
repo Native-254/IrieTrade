@@ -8,10 +8,12 @@ from utils.logger import log
 
 class EmailAlerter:
     def __init__(self):
-        self.sender = os.getenv('EMAIL_SENDER')
-        self.api_key = os.getenv('EMAIL_BREVO_API_KEY')
-        self.recipient = os.getenv('EMAIL_RECIPIENT')
-        self.logo_url = os.getenv('EMAIL_LOGO_URL', 'https://irie-web.vercel.app/logo.png')
+        self.sender = os.getenv("EMAIL_SENDER")
+        self.api_key = os.getenv("EMAIL_BREVO_API_KEY")
+        self.recipient = os.getenv("EMAIL_RECIPIENT")
+        self.logo_url = os.getenv(
+            "EMAIL_LOGO_URL", "https://irie-web.vercel.app/logo.png"
+        )
         self.enabled = all([self.sender, self.api_key, self.recipient])
         if self.enabled:
             log.info("Email alerter initialized (Brevo API).")
@@ -22,15 +24,12 @@ class EmailAlerter:
             return
 
         url = "https://api.brevo.com/v3/smtp/email"
-        headers = {
-            "api-key": self.api_key,
-            "Content-Type": "application/json"
-        }
+        headers = {"api-key": self.api_key, "Content-Type": "application/json"}
         payload = {
             "sender": {"email": self.sender},
             "to": [{"email": self.recipient}],
             "subject": subject,
-            "htmlContent": body_html
+            "htmlContent": body_html,
         }
 
         try:
@@ -55,7 +54,7 @@ class EmailAlerter:
 
     def send_trade_alert(self, symbol: str, action: str, quantity: int, price: float):
         subject = f"IrieTrade Alert: {action} {quantity} {symbol} @ ${price:,.2f}"
-        action_color = "#00b894" if action in ('BUY', 'BUY_TO_COVER') else "#e17055"
+        action_color = "#00b894" if action in ("BUY", "BUY_TO_COVER") else "#e17055"
         body = f"""
         <html>
         <body style="font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; background-color: #0b111a; color: #dfe6e9; padding: 20px;">

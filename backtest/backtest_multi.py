@@ -1,29 +1,55 @@
 # backtest/backtest_multi.py
+"""Run the backtest engine over all symbols in the configuration."""
+
 from backtest.engine import BacktestEngine
-from strategies.mean_revisions import MeanReversion
-from strategies.trend_following_long_only import TrendFollowingLongOnly
-from strategies.trend_following_ls import TrendFollowingLS
+from data.manager import DataManager
 from utils.config import CONFIG
+from utils.logger import log
 
-config = CONFIG
 
-strategies = [
-    TrendFollowingLS(config['strategies']['parameters']['trend_following_ls']),
-    MeanReversion(config['strategies']['parameters']['mean_reversion']),
-    TrendFollowingLongOnly(config['strategies']['parameters'].get(
-        'trend_following_long_only',
-        {'fast_ma': 50, 'slow_ma': 200, 'rsi_period': 14, 'rsi_oversold': 30, 'rsi_overbought': 70}
-    ))
-]
+def main():
+    symbols = CONFIG["trading"]["symbols"]
+    start_date = "2015-01-01"
+    end_date = "2025-12-31"
 
-engine = BacktestEngine(config, strategies)
+    data_mgr = DataManager()
+    engine = BacktestEngine()
 
-symbols = ['AAPL', 'MSFT', 'GOOGL', 'TSLA', 'NVDA', 'AMZN', 'META', 'JPM', 'V', 'MA', 'PG', 'DIS', 'HD', 'BAC', 'VZ',
-           'ADBE', 'CMCSA', 'NFLX', 'INTC', 'CSCO', 'PFE', 'MRK', 'KO', 'PEP', 'WMT', 'CVX', 'XOM', 'T', 'UNH', 'COST',
-           'ORCL', 'ABT', 'CRM', 'NKE', 'MCD', 'IBM', 'LLY', 'MDT', 'BMY', 'AMGN', 'SBUX', 'QCOM', 'TXN', 'GILD', 'FISV',
-           'INTU', 'GE', 'BA', 'CAT', 'MMM', 'AXP', 'SPGI', 'DE', 'DUK', 'SO', 'NEE', 'EXC', 'AEP', 'ED', 'D', 'EIX', 'PEG',
-           'SRE', 'WEC', 'ES', 'CMS', 'VTI', 'QQQM', 'SMH', 'FDVV', 'FTEC', 'VWO', 'VOO', 'SCHM', 'QQQ', 'SCHA', 'SCHD', 'VGT']
+    results = []
+    for symbol in symbols:
+        log.info(f"Backtesting {symbol} …")
+        df = data_mgr.get_data(
+            symbol,
+            start_date=start_date,
+            end_date=end_date,
+            interval="1d",
+            force_refresh=False,
+        )
+        if df.empty:
+            log.warning(f"No data for {symbol}, skipping.")
+            continue
 
-results = engine.run(symbols, '2015-01-01', '2025-12-31')
-for sym, stats in results.items():
-    print(f"{sym}: {stats['total_trades']} trades, Win Rate {stats['win_rate']:.2%}, Total PnL ${stats['total_pnl']:,.2f}")
+        result = engine.run(symbol, df, start_date=start_date, end_date=end_date)
+        if "error" in result:
+            log.error(f"Backtest failed for {symbol}: {result['error']}")
+            continue
+
+        final_return = (
+            (result["final_capital"] - engine.initial_capital)
+            / engine.initial_capital
+            * 100
+        )
+        trades = result["total_trades"]
+        log.success(f"{symbol}: {trades} trades, final return {final_return:+.2f}%")
+        results.append((symbol, trades, final_return))
+
+    # Summary
+    print("\nBacktest Summary")
+    print("=" * 50)
+    for sym, tr, ret in sorted(results, key=lambda x: x[2], reverse=True):
+        print(f"{sym:<8}  {tr:4d} trades  {ret:+8.2f}%")
+    print("=" * 50)
+
+
+if __name__ == "__main__":
+    main()

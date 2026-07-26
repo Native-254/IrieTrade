@@ -9,34 +9,110 @@ from strategies.signals import Signal
 from strategies.trend_following_ls import TrendFollowingLS
 
 symbols = [
-    'AAPL', 'MSFT', 'GOOGL', 'TSLA', 'NVDA', 'AMZN', 'META', 'JPM', 'V', 'MA', 'PG', 'DIS', 'HD', 'BAC', 'VZ',
-    'ADBE', 'CMCSA', 'NFLX', 'INTC', 'CSCO', 'PFE', 'MRK', 'KO', 'PEP', 'WMT', 'CVX', 'XOM', 'T', 'UNH', 'COST',
-    'ORCL', 'ABT', 'CRM', 'NKE', 'MCD', 'IBM', 'LLY', 'MDT', 'BMY', 'AMGN', 'SBUX', 'QCOM', 'TXN', 'GILD', 'FISV',
-    'INTU', 'GE', 'BA', 'CAT', 'MMM', 'AXP', 'SPGI', 'DE', 'DUK', 'SO', 'NEE', 'EXC', 'AEP', 'ED', 'D', 'EIX',
-    'PEG', 'SRE', 'WEC', 'ES', 'CMS', 'VTI', 'QQQM', 'SMH', 'FDVV', 'FTEC', 'VWO', 'VOO', 'SCHM', 'QQQ',
-    'SCHA', 'SCHD', 'VGT'
+    "AAPL",
+    "MSFT",
+    "GOOGL",
+    "TSLA",
+    "NVDA",
+    "AMZN",
+    "META",
+    "JPM",
+    "V",
+    "MA",
+    "PG",
+    "DIS",
+    "HD",
+    "BAC",
+    "VZ",
+    "ADBE",
+    "CMCSA",
+    "NFLX",
+    "INTC",
+    "CSCO",
+    "PFE",
+    "MRK",
+    "KO",
+    "PEP",
+    "WMT",
+    "CVX",
+    "XOM",
+    "T",
+    "UNH",
+    "COST",
+    "ORCL",
+    "ABT",
+    "CRM",
+    "NKE",
+    "MCD",
+    "IBM",
+    "LLY",
+    "MDT",
+    "BMY",
+    "AMGN",
+    "SBUX",
+    "QCOM",
+    "TXN",
+    "GILD",
+    "FISV",
+    "INTU",
+    "GE",
+    "BA",
+    "CAT",
+    "MMM",
+    "AXP",
+    "SPGI",
+    "DE",
+    "DUK",
+    "SO",
+    "NEE",
+    "EXC",
+    "AEP",
+    "ED",
+    "D",
+    "EIX",
+    "PEG",
+    "SRE",
+    "WEC",
+    "ES",
+    "CMS",
+    "VTI",
+    "QQQM",
+    "SMH",
+    "FDVV",
+    "FTEC",
+    "VWO",
+    "VOO",
+    "SCHM",
+    "QQQ",
+    "SCHA",
+    "SCHD",
+    "VGT",
 ]
 
-strategy1 = TrendFollowingLS({
-    'fast_ma': 50,
-    'slow_ma': 200,
-    'rsi_period': 14,
-    'rsi_oversold': 30,
-    'rsi_overbought': 70,
-})
-strategy2 = MeanReversion({
-    'bb_period': 20,
-    'bb_std': 2.0,
-    'rsi_period': 14,
-    'rsi_oversold': 30,
-    'rsi_overbought': 70,
-})
+strategy1 = TrendFollowingLS(
+    {
+        "fast_ma": 50,
+        "slow_ma": 200,
+        "rsi_period": 14,
+        "rsi_oversold": 30,
+        "rsi_overbought": 70,
+    }
+)
+strategy2 = MeanReversion(
+    {
+        "bb_period": 20,
+        "bb_std": 2.0,
+        "rsi_period": 14,
+        "rsi_oversold": 30,
+        "rsi_overbought": 70,
+    }
+)
 
 dm = DataManager()
 all_results = []
 
 for symbol in symbols:
-    df = dm.get_data(symbol, '2015-01-01', '2025-12-31', interval='1d')
+    df = dm.get_data(symbol, "2015-01-01", "2025-12-31", interval="1d")
     if df.empty:
         print(f"Skipping {symbol}: no data")
         continue
@@ -52,14 +128,14 @@ for symbol in symbols:
         continue
 
     pf = vbt.Portfolio.from_signals(
-        close=df['close'],
+        close=df["close"],
         entries=entries,
         exits=exits,
         init_cash=10_000,
-        freq='D',
+        freq="D",
         fees=0.001,
         slippage=0.0005,
-        size=1
+        size=1,
     )
 
     stats = pf.stats()

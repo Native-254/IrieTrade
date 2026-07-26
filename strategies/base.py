@@ -17,7 +17,13 @@ class BaseStrategy(ABC):
         """Generates trading signals based on input data."""
         ...
 
-    def calculate_position_size(self, capital: float, risk_per_trade: float, entry_price: float, stop_loss_price: float) -> int:
+    def calculate_position_size(
+        self,
+        capital: float,
+        risk_per_trade: float,
+        entry_price: float,
+        stop_loss_price: float,
+    ) -> int:
         """Standard position sizing: (Capital * Risk) / |Entry - Stop|"""
         risk_amount = capital * risk_per_trade
         if entry_price == stop_loss_price:

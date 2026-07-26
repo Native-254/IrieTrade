@@ -24,32 +24,44 @@ app = FastAPI()
 
 trading_engine = None
 
+
 def _is_configured() -> bool:
     """Check if the bot has been configured (has broker credentials)."""
-    env_path = Path('.env')
+    env_path = Path(".env")
     if not env_path.exists():
         return False
     with open(env_path) as f:
         content = f.read()
-    markers = ['IB_ACCOUNT_ID=', 'BINANCE_API_KEY=', 'OKX_API_KEY=',
-               'COINBASE_API_KEY=', 'KRAKEN_API_KEY=', 'KUCOIN_API_KEY=']
+    markers = [
+        "IB_ACCOUNT_ID=",
+        "BINANCE_API_KEY=",
+        "OKX_API_KEY=",
+        "COINBASE_API_KEY=",
+        "KRAKEN_API_KEY=",
+        "KUCOIN_API_KEY=",
+    ]
     return any(marker in content for marker in markers)
+
 
 def set_trading_engine(engine):
     global trading_engine
     trading_engine = engine
     log.info("Trading engine registered with API")
 
+
 @app.get("/")
 async def root_redirect():
     if not _is_configured():
         return FileResponse("config/setup.html")
     from fastapi.responses import RedirectResponse
+
     return RedirectResponse(url="/dashboard")
+
 
 @app.get("/health")
 async def health_check():
-    return {"status": "ok", "bot_name": CONFIG['general']['bot_name']}
+    return {"status": "ok", "bot_name": CONFIG["general"]["bot_name"]}
+
 
 @app.get("/account")
 async def account_info():
@@ -64,6 +76,7 @@ async def account_info():
     except Exception:  # noqa: BLE001
         return {"status": "error", "message": "Internal error"}
 
+
 @app.get("/api/signals")
 async def api_signals(symbol: str = Query(..., description="Ticker symbol")):
     if not trading_engine:
@@ -71,13 +84,22 @@ async def api_signals(symbol: str = Query(..., description="Ticker symbol")):
     now_utc = datetime.now(timezone.utc)
     df = trading_engine.data_manager.get_data(
         symbol,
-        start_date=(now_utc - timedelta(days=7)).strftime('%Y-%m-%d'),
-        end_date=now_utc.strftime('%Y-%m-%d'),
-        interval="15m", force_refresh=True)
+        start_date=(now_utc - timedelta(days=7)).strftime("%Y-%m-%d"),
+        end_date=now_utc.strftime("%Y-%m-%d"),
+        interval="15m",
+        force_refresh=True,
+    )
     if df.empty:
         return {"error": "No data"}
-    signals = [str(strat.generate_signals(df).iloc[-1]) for strat in trading_engine.strategies]
-    return {"symbol": symbol, "signals": signals, "last_price": float(df['close'].iloc[-1])}
+    signals = [
+        str(strat.generate_signals(df).iloc[-1]) for strat in trading_engine.strategies
+    ]
+    return {
+        "symbol": symbol,
+        "signals": signals,
+        "last_price": float(df["close"].iloc[-1]),
+    }
+
 
 @app.get("/api/positions")
 async def api_positions():
@@ -86,14 +108,17 @@ async def api_positions():
     positions = []
     for pm in trading_engine.position_managers.values():
         for pos in pm.positions.values():
-            positions.append({
-                'symbol': pos.symbol,
-                'side': pos.side,
-                'quantity': pos.quantity,
-                'entry_price': pos.entry_price,
-                'stop_loss': pos.stop_loss,
-            })
+            positions.append(
+                {
+                    "symbol": pos.symbol,
+                    "side": pos.side,
+                    "quantity": pos.quantity,
+                    "entry_price": pos.entry_price,
+                    "stop_loss": pos.stop_loss,
+                }
+            )
     return {"positions": positions}
+
 
 @app.get("/api/performance")
 async def api_performance():
@@ -102,8 +127,16 @@ async def api_performance():
     nav = sum(rm.current_capital for rm in trading_engine.risk_managers.values())
     daily_pnl = sum(rm.daily_pnl for rm in trading_engine.risk_managers.values())
     open_risk_val = sum(rm.open_risk for rm in trading_engine.risk_managers.values())
-    open_positions = sum(len(pm.positions) for pm in trading_engine.position_managers.values())
-    return {"nav": nav, "daily_pnl": daily_pnl, "open_risk": open_risk_val, "open_positions": open_positions}
+    open_positions = sum(
+        len(pm.positions) for pm in trading_engine.position_managers.values()
+    )
+    return {
+        "nav": nav,
+        "daily_pnl": daily_pnl,
+        "open_risk": open_risk_val,
+        "open_positions": open_positions,
+    }
+
 
 @app.get("/dashboard", response_class=HTMLResponse)
 async def dashboard():
@@ -122,15 +155,15 @@ async def dashboard():
         positions.update(pm.positions)
     open_pos = len(positions)
 
-    df = pd.DataFrame(history, columns=['time', 'nav'])
-    df.set_index('time', inplace=True)
+    df = pd.DataFrame(history, columns=["time", "nav"])
+    df.set_index("time", inplace=True)
     df = df.sort_index()
 
-    last_nav = df['nav'].iloc[-1] if len(df) else nav
-    first_nav = df['nav'].iloc[0] if len(df) else nav
+    last_nav = df["nav"].iloc[-1] if len(df) else nav
+    first_nav = df["nav"].iloc[0] if len(df) else nav
     total_return = (last_nav - first_nav) / first_nav * 100 if first_nav else 0
-    daily_change = df['nav'].iloc[-1] - df['nav'].iloc[-2] if len(df) > 1 else 0
-    daily_pct = (daily_change / df['nav'].iloc[-2]) * 100 if len(df) > 1 else 0
+    daily_change = df["nav"].iloc[-1] - df["nav"].iloc[-2] if len(df) > 1 else 0
+    daily_pct = (daily_change / df["nav"].iloc[-2]) * 100 if len(df) > 1 else 0
     current_capital = nav
 
     latest_prices = {}
@@ -139,55 +172,75 @@ async def dashboard():
     computed_unrealized = 0.0
     for pos in positions.values():
         price = latest_prices.get(pos.symbol, pos.entry_price)
-        if pos.side == 'BUY':
+        if pos.side == "BUY":
             computed_unrealized += (price - pos.entry_price) * pos.quantity
         else:
             computed_unrealized += (pos.entry_price - price) * pos.quantity
     unrealized_pnl = computed_unrealized
-    realized_pnl = getattr(trading_engine, 'realized_pnl', 0.0)
+    realized_pnl = getattr(trading_engine, "realized_pnl", 0.0)
     trading_total = unrealized_pnl + realized_pnl
     interest_effect = (last_nav - first_nav) - trading_total
 
     rolling_sharpe = None
     if len(df) >= 30:
-        daily_returns = df['nav'].pct_change().dropna()
+        daily_returns = df["nav"].pct_change().dropna()
         if len(daily_returns) >= 30:
-            sharpe_series = (daily_returns.rolling(30).mean() / daily_returns.rolling(30).std()) * (252 ** 0.5)
+            sharpe_series = (
+                daily_returns.rolling(30).mean() / daily_returns.rolling(30).std()
+            ) * (252**0.5)
             rolling_sharpe = sharpe_series.iloc[-1] if not sharpe_series.empty else None
-    sharpe_display = f"{rolling_sharpe:.2f}" if rolling_sharpe is not None else '—'
+    sharpe_display = f"{rolling_sharpe:.2f}" if rolling_sharpe is not None else "—"
 
     bot_status = "Running" if trading_engine.is_running else "Stopped"
     portfolio_heat = open_risk_val / current_capital * 100 if current_capital else 0.0
 
     # Plotly chart
     fig = make_subplots(rows=1, cols=1)
-    color_line = '#00b894' if total_return >= 0 else '#e17055'
-    fig.add_trace(go.Scatter(
-        x=df.index, y=df['nav'], mode='lines',
-        line={"color": color_line, "width": 2},
-        fill='tozeroy',
-        fillcolor='rgba(0, 184, 148, 0.1)' if total_return >= 0 else 'rgba(225, 112, 85, 0.1)',
-        name='NAV'
-    ))
-    fig.update_layout(
-        template='plotly_dark',
-        title={'text': 'IrieTrade Equity Curve', 'x': 0.05, 'font': {'size': 24, 'family': 'Arial Black'}},
-        xaxis={"showgrid": False, "zeroline": False},
-        yaxis={"title": "Net Asset Value (USD)", "showgrid": True, "gridcolor": "rgba(255,255,255,0.05)", "zeroline": False},
-        paper_bgcolor='rgba(0,0,0,0)', plot_bgcolor='rgba(0,0,0,0)',
-        font={"color": "#dfe6e9"}, margin={"l": 20, "r": 20, "t": 60, "b": 20}, hovermode='x unified'
+    color_line = "#00b894" if total_return >= 0 else "#e17055"
+    fig.add_trace(
+        go.Scatter(
+            x=df.index,
+            y=df["nav"],
+            mode="lines",
+            line={"color": color_line, "width": 2},
+            fill="tozeroy",
+            fillcolor="rgba(0, 184, 148, 0.1)"
+            if total_return >= 0
+            else "rgba(225, 112, 85, 0.1)",
+            name="NAV",
+        )
     )
-    plot_html = fig.to_html(full_html=False, config={'responsive': True})
+    fig.update_layout(
+        template="plotly_dark",
+        title={
+            "text": "IrieTrade Equity Curve",
+            "x": 0.05,
+            "font": {"size": 24, "family": "Arial Black"},
+        },
+        xaxis={"showgrid": False, "zeroline": False},
+        yaxis={
+            "title": "Net Asset Value (USD)",
+            "showgrid": True,
+            "gridcolor": "rgba(255,255,255,0.05)",
+            "zeroline": False,
+        },
+        paper_bgcolor="rgba(0,0,0,0)",
+        plot_bgcolor="rgba(0,0,0,0)",
+        font={"color": "#dfe6e9"},
+        margin={"l": 20, "r": 20, "t": 60, "b": 20},
+        hovermode="x unified",
+    )
+    plot_html = fig.to_html(full_html=False, config={"responsive": True})
 
     # Positions table
     position_rows = ""
     for pos in positions.values():
         current_price = latest_prices.get(pos.symbol, pos.entry_price)
-        if pos.side == 'BUY':
+        if pos.side == "BUY":
             pnl = (current_price - pos.entry_price) * pos.quantity
         else:
             pnl = (pos.entry_price - current_price) * pos.quantity
-        pnl_class = 'metric-positive' if pnl >= 0 else 'metric-negative'
+        pnl_class = "metric-positive" if pnl >= 0 else "metric-negative"
         stop_display = f"${pos.stop_loss:,.2f}" if pos.stop_loss else "—"
         position_rows += f"""
             <tr>
@@ -200,9 +253,11 @@ async def dashboard():
 
     recent_trades_html = ""
     if trading_engine.trade_results:
-        recent_trades_html = "<ul style='list-style:none; padding:0; color:#b0becd; font-size:14px;'>"
+        recent_trades_html = (
+            "<ul style='list-style:none; padding:0; color:#b0becd; font-size:14px;'>"
+        )
         for result_type, pnl_frac in trading_engine.trade_results[-10:]:
-            color = "#00d084" if result_type == 'win' else "#ff7c7c"
+            color = "#00d084" if result_type == "win" else "#ff7c7c"
             recent_trades_html += f"<li style='margin:4px 0;'><span style='color:{color};'>{result_type.upper()}</span> - {pnl_frac:+.2%}</li>"
         recent_trades_html += "</ul>"
     else:
@@ -296,27 +351,27 @@ async def dashboard():
                         </div>
                         <div class="stat-card">
                             <div class="stat-label">Daily P&L</div>
-                            <div class="stat-value {('metric-positive' if daily_pnl >= 0 else 'metric-negative')}">{daily_pnl:+,.2f}</div>
+                            <div class="stat-value {("metric-positive" if daily_pnl >= 0 else "metric-negative")}">{daily_pnl:+,.2f}</div>
                             <div class="stat-subtext">{daily_pct:+.2f}% change</div>
                         </div>
                         <div class="stat-card">
                             <div class="stat-label">Unrealised P&L</div>
-                            <div class="stat-value {('metric-positive' if unrealized_pnl >= 0 else 'metric-negative')}">{unrealized_pnl:+,.2f}</div>
+                            <div class="stat-value {("metric-positive" if unrealized_pnl >= 0 else "metric-negative")}">{unrealized_pnl:+,.2f}</div>
                             <div class="stat-subtext">Mark‑to‑market</div>
                         </div>
                         <div class="stat-card">
                             <div class="stat-label">Trading P&L (U+R)</div>
-                            <div class="stat-value {('metric-positive' if trading_total >= 0 else 'metric-negative')}">{trading_total:+,.2f}</div>
+                            <div class="stat-value {("metric-positive" if trading_total >= 0 else "metric-negative")}">{trading_total:+,.2f}</div>
                             <div class="stat-subtext">Excludes interest & dividends</div>
                         </div>
                         <div class="stat-card">
                             <div class="stat-label">Interest & Div Effect</div>
-                            <div class="stat-value {('metric-positive' if interest_effect >= 0 else 'metric-negative')}">{interest_effect:+,.2f}</div>
+                            <div class="stat-value {("metric-positive" if interest_effect >= 0 else "metric-negative")}">{interest_effect:+,.2f}</div>
                             <div class="stat-subtext">NAV change driven by cash</div>
                         </div>
                         <div class="stat-card">
                             <div class="stat-label">30-Day Rolling Sharpe</div>
-                            <div class="stat-value {('metric-positive' if rolling_sharpe is not None and rolling_sharpe >= 0 else 'metric-negative')}">{sharpe_display}</div>
+                            <div class="stat-value {("metric-positive" if rolling_sharpe is not None and rolling_sharpe >= 0 else "metric-negative")}">{sharpe_display}</div>
                             <div class="stat-subtext">Risk-adjusted return (annualised)</div>
                         </div>
                         <div class="stat-card">
@@ -333,7 +388,7 @@ async def dashboard():
                         </div>
                         <div class="asset-card">
                             <h3>Unrealized P&L</h3>
-                            <div class="asset-value {('metric-positive' if unrealized_pnl >= 0 else 'metric-negative')}">{unrealized_pnl:+,.2f}</div>
+                            <div class="asset-value {("metric-positive" if unrealized_pnl >= 0 else "metric-negative")}">{unrealized_pnl:+,.2f}</div>
                             <div class="asset-change">Broker unrealized P&L</div>
                         </div>
                         <div class="asset-card">
@@ -343,7 +398,7 @@ async def dashboard():
                         </div>
                         <div class="asset-card">
                             <h3>Latest refresh</h3>
-                            <div class="asset-value">{now_utc.strftime('%H:%M:%S')}</div>
+                            <div class="asset-value">{now_utc.strftime("%H:%M:%S")}</div>
                             <div class="asset-change">Real-time dashboard snapshot</div>
                         </div>
                     </div>
@@ -399,41 +454,42 @@ async def dashboard():
     </html>
     """)
 
+
 # ---------- Onboarding / Setup ----------
 def test_broker_connection(broker_name: str, credentials: dict) -> bool:
     """Quickly test if a broker can connect with the given credentials."""
     try:
-        if broker_name == 'ib':
+        if broker_name == "ib":
             broker = IBBroker()
-            broker.config['account_id'] = credentials['account_id']
+            broker.config["account_id"] = credentials["account_id"]
             broker.connect()
-        elif broker_name == 'binance':
-            broker = BinanceBroker({'testnet': False})
-            broker.api_key = credentials['api_key']
-            broker.secret = credentials['secret']
+        elif broker_name == "binance":
+            broker = BinanceBroker({"testnet": False})
+            broker.api_key = credentials["api_key"]
+            broker.secret = credentials["secret"]
             broker.connect()
-        elif broker_name == 'okx':
-            broker = OKXBroker({'testnet': False})
-            broker.api_key = credentials['api_key']
-            broker.secret = credentials['secret']
-            broker.password = credentials.get('passphrase', '')
+        elif broker_name == "okx":
+            broker = OKXBroker({"testnet": False})
+            broker.api_key = credentials["api_key"]
+            broker.secret = credentials["secret"]
+            broker.password = credentials.get("passphrase", "")
             broker.connect()
-        elif broker_name == 'coinbase':
-            broker = CoinbaseBroker({'testnet': False})
-            broker.api_key = credentials['api_key']
-            broker.secret = credentials['secret']
-            broker.password = credentials.get('passphrase', '')
+        elif broker_name == "coinbase":
+            broker = CoinbaseBroker({"testnet": False})
+            broker.api_key = credentials["api_key"]
+            broker.secret = credentials["secret"]
+            broker.password = credentials.get("passphrase", "")
             broker.connect()
-        elif broker_name == 'kraken':
-            broker = KrakenBroker({'testnet': False})
-            broker.api_key = credentials['api_key']
-            broker.secret = credentials['secret']
+        elif broker_name == "kraken":
+            broker = KrakenBroker({"testnet": False})
+            broker.api_key = credentials["api_key"]
+            broker.secret = credentials["secret"]
             broker.connect()
-        elif broker_name == 'kucoin':
-            broker = KucoinBroker({'testnet': False})
-            broker.api_key = credentials['api_key']
-            broker.secret = credentials['secret']
-            broker.password = credentials.get('passphrase', '')
+        elif broker_name == "kucoin":
+            broker = KucoinBroker({"testnet": False})
+            broker.api_key = credentials["api_key"]
+            broker.secret = credentials["secret"]
+            broker.password = credentials.get("passphrase", "")
             broker.connect()
         else:
             return False
@@ -443,58 +499,64 @@ def test_broker_connection(broker_name: str, credentials: dict) -> bool:
     except Exception:  # noqa: BLE001
         return False
 
+
 @app.post("/api/setup/validate")
 async def setup_validate(request: Request):
     data = await request.json()
-    brokers = data.get('brokers', [])
-    credentials = data.get('credentials', {})
+    brokers = data.get("brokers", [])
+    credentials = data.get("credentials", {})
 
     for broker in brokers:
         if not test_broker_connection(broker, credentials.get(broker, {})):
             return {"success": False, "message": f"Connection failed for {broker}"}
     return {"success": True, "message": "All connections successful"}
 
+
 @app.post("/api/setup/save")
 async def setup_save(request: Request):
     data = await request.json()
-    brokers = data.get('brokers', [])
-    credentials = data.get('credentials', {})
-    symbols = data.get('symbols', [])
+    brokers = data.get("brokers", [])
+    credentials = data.get("credentials", {})
+    symbols = data.get("symbols", [])
 
     # 1. Write .env file
-    env_path = Path('.env')
-    with open(env_path, 'a') as f:  # noqa: ASYNC230
+    env_path = Path(".env")
+    with open(env_path, "a") as f:  # noqa: ASYNC230
         for broker in brokers:
-            if broker == 'ib':
-                val = credentials[broker]['account_id']
+            if broker == "ib":
+                val = credentials[broker]["account_id"]
                 f.write(f"IB_ACCOUNT_ID={encrypt(val)}\n")
-            elif broker == 'binance':
+            elif broker == "binance":
                 f.write(f"BINANCE_API_KEY={credentials[broker]['api_key']}\n")
                 f.write(f"BINANCE_SECRET={credentials[broker]['secret']}\n")
-            elif broker == 'okx':
+            elif broker == "okx":
                 f.write(f"OKX_API_KEY={credentials[broker]['api_key']}\n")
                 f.write(f"OKX_SECRET={credentials[broker]['secret']}\n")
                 f.write(f"OKX_PASSPHRASE={credentials[broker].get('passphrase', '')}\n")
-            elif broker == 'coinbase':
+            elif broker == "coinbase":
                 f.write(f"COINBASE_API_KEY={credentials[broker]['api_key']}\n")
                 f.write(f"COINBASE_SECRET={credentials[broker]['secret']}\n")
-                f.write(f"COINBASE_PASSPHRASE={credentials[broker].get('passphrase', '')}\n")
-            elif broker == 'kraken':
+                f.write(
+                    f"COINBASE_PASSPHRASE={credentials[broker].get('passphrase', '')}\n"
+                )
+            elif broker == "kraken":
                 f.write(f"KRAKEN_API_KEY={credentials[broker]['api_key']}\n")
                 f.write(f"KRAKEN_SECRET={credentials[broker]['secret']}\n")
-            elif broker == 'kucoin':
+            elif broker == "kucoin":
                 f.write(f"KUCOIN_API_KEY={credentials[broker]['api_key']}\n")
                 f.write(f"KUCOIN_SECRET={credentials[broker]['secret']}\n")
-                f.write(f"KUCOIN_PASSPHRASE={credentials[broker].get('passphrase', '')}\n")
+                f.write(
+                    f"KUCOIN_PASSPHRASE={credentials[broker].get('passphrase', '')}\n"
+                )
 
     # 2. Update settings.yaml with brokers and symbols
-    config_path = Path('config/settings.yaml')
+    config_path = Path("config/settings.yaml")
     with open(config_path) as f:  # noqa: ASYNC230
         config = yaml.safe_load(f)
-    config['trading']['platforms'] = brokers
-    config['trading']['platform'] = brokers[0]
-    config['trading']['symbols'] = symbols
-    with open(config_path, 'w') as f:  # noqa: ASYNC230
+    config["trading"]["platforms"] = brokers
+    config["trading"]["platform"] = brokers[0]
+    config["trading"]["symbols"] = symbols
+    with open(config_path, "w") as f:  # noqa: ASYNC230
         yaml.dump(config, f)
 
     # 3. Signal the engine to restart with new config
@@ -503,11 +565,13 @@ async def setup_save(request: Request):
 
     return {"success": True, "message": "Configuration saved and bot restarted"}
 
+
 @app.get("/setup")
 async def setup_page():
     return FileResponse("config/setup.html")
 
+
 def run_api():
-    port = CONFIG['monitoring']['health_check_port']
+    port = CONFIG["monitoring"]["health_check_port"]
     log.info(f"Starting health check API on port {port}")
     uvicorn.run(app, host="0.0.0.0", port=port, log_level="warning")

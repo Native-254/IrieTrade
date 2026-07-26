@@ -4,6 +4,7 @@ from execution.coinbase_broker import CoinbaseBroker
 from execution.ib_broker import IBBroker
 from execution.kraken_broker import KrakenBroker
 from execution.kucoin_broker import KucoinBroker
+from execution.nse_broker import NSEBroker
 from execution.okx_broker import OKXBroker
 
 
@@ -13,21 +14,23 @@ class BrokerManager:
         self._init_brokers(config)
 
     def _init_brokers(self, config):
-        platforms = config['trading'].get('platforms', [config['trading']['platform']])
-        exchanges_cfg = config['exchanges']
+        platforms = config["trading"].get("platforms", [config["trading"]["platform"]])
+        exchanges_cfg = config["exchanges"]
 
-        if 'ib' in platforms:
-            self.brokers['ib'] = IBBroker()
-        if 'binance' in platforms:
-            self.brokers['binance'] = BinanceBroker(exchanges_cfg.get('binance', {}))
-        if 'okx' in platforms:
-            self.brokers['okx'] = OKXBroker(exchanges_cfg.get('okx', {}))
-        if 'coinbase' in platforms:
-            self.brokers['coinbase'] = CoinbaseBroker(exchanges_cfg.get('coinbase', {}))
-        if 'kraken' in platforms:
-            self.brokers['kraken'] = KrakenBroker(exchanges_cfg.get('kraken', {}))
-        if 'kucoin' in platforms:
-            self.brokers['kucoin'] = KucoinBroker(exchanges_cfg.get('kucoin', {}))
+        if "ib" in platforms:
+            self.brokers["ib"] = IBBroker()
+        if "binance" in platforms:
+            self.brokers["binance"] = BinanceBroker(exchanges_cfg.get("binance", {}))
+        if "okx" in platforms:
+            self.brokers["okx"] = OKXBroker(exchanges_cfg.get("okx", {}))
+        if "coinbase" in platforms:
+            self.brokers["coinbase"] = CoinbaseBroker(exchanges_cfg.get("coinbase", {}))
+        if "kraken" in platforms:
+            self.brokers["kraken"] = KrakenBroker(exchanges_cfg.get("kraken", {}))
+        if "kucoin" in platforms:
+            self.brokers["kucoin"] = KucoinBroker(exchanges_cfg.get("kucoin", {}))
+        if "nse" in platforms:
+            self.brokers["nse"] = NSEBroker(exchanges_cfg.get("nse", {}))
 
         if not self.brokers:
             raise ValueError("No trading platform enabled. Check config.")

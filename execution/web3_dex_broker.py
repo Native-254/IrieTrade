@@ -9,10 +9,12 @@ from utils.logger import log
 class Web3DEXBroker(Broker):
     def __init__(self, config: dict):
         self.config = config
-        self.chain_name = config.get('chain', 'ethereum')
-        self.rpc_url = config.get('rpc_url', os.getenv(f'{self.chain_name.upper()}_RPC_URL'))
-        self.private_key = os.getenv('WALLET_PRIVATE_KEY')
-        self.router_address = config.get('router_address')
+        self.chain_name = config.get("chain", "ethereum")
+        self.rpc_url = config.get(
+            "rpc_url", os.getenv(f"{self.chain_name.upper()}_RPC_URL")
+        )
+        self.private_key = os.getenv("WALLET_PRIVATE_KEY")
+        self.router_address = config.get("router_address")
         self.connected = False
         self.supports_bracket = False
 
@@ -25,13 +27,13 @@ class Web3DEXBroker(Broker):
         self.connected = False
 
     def get_account_info(self):
-        return {'net_liquidation': 0.0}
+        return {"net_liquidation": 0.0}
 
     def place_order(self, *args, **kwargs):
         raise NotImplementedError
 
     def wait_for_fill(self, *args, **kwargs):
-        return {'filled': 0, 'status': 'Timeout'}
+        return {"filled": 0, "status": "Timeout"}
 
     def place_bracket_long(self, *args):
         raise NotImplementedError

@@ -62,7 +62,8 @@ def test_place_trade_sends_trade_email_on_success(monkeypatch):
         lambda self, symbol, qty, entry, stop, tp: ("order1", "stop1"), broker
     )
     broker.wait_for_fill = types.MethodType(
-        lambda self, order_id: {"status": "Filled", "filled": 10, "avg_price": 100.0}, broker
+        lambda self, order_id: {"status": "Filled", "filled": 10, "avg_price": 100.0},
+        broker,
     )
 
     # Required args for _place_trade: broker, pm, symbol, action, qty, last_price, stop_loss, atr, vol_stop_mult
@@ -97,9 +98,14 @@ def test_place_trade_sends_error_email_on_no_position(monkeypatch):
 
     # Suppress logging to avoid console noise
     monkeypatch.setattr(
-        engine_module, "log",
-        types.SimpleNamespace(error=lambda *a, **kw: None, warning=lambda *a, **kw: None,
-                              exception=lambda *a, **kw: None, info=lambda *a, **kw: None)
+        engine_module,
+        "log",
+        types.SimpleNamespace(
+            error=lambda *a, **kw: None,
+            warning=lambda *a, **kw: None,
+            exception=lambda *a, **kw: None,
+            info=lambda *a, **kw: None,
+        ),
     )
 
     success = engine._place_trade(

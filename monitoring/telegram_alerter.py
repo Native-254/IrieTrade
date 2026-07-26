@@ -7,8 +7,8 @@ from utils.logger import log
 
 class TelegramAlerter:
     def __init__(self):
-        self.config = CONFIG['monitoring']['telegram']
-        self.enabled = self.config['enabled']
+        self.config = CONFIG["monitoring"]["telegram"]
+        self.enabled = self.config["enabled"]
         if self.enabled:
             self.base_url = f"https://api.telegram.org/bot{self.config['bot_token']}/"
             log.info("Telegram alerter initialized.")
@@ -20,7 +20,11 @@ class TelegramAlerter:
 
         try:
             url = self.base_url + "sendMessage"
-            payload = {'chat_id': self.config['chat_id'], 'text': message, 'parse_mode': 'HTML'}
+            payload = {
+                "chat_id": self.config["chat_id"],
+                "text": message,
+                "parse_mode": "HTML",
+            }
             response = requests.post(url, json=payload, timeout=10)
             response.raise_for_status()
             log.debug(f"Telegram alert sent: {message[:50]}...")

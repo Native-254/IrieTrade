@@ -6,7 +6,7 @@ from utils.config import CONFIG
 
 load_dotenv(override=True)
 
-token = CONFIG['monitoring']['telegram']['bot_token']
+token = CONFIG["monitoring"]["telegram"]["bot_token"]
 print(f"DEBUG: Bot token starts with: {token[:10]}... (length: {len(token)})")
 print(f"DEBUG: Chat ID: {CONFIG['monitoring']['telegram']['chat_id']}")
 

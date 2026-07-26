@@ -11,9 +11,9 @@ from utils.logger import log
 class BinanceBroker(Broker):
     def __init__(self, config: dict):
         self.config = config
-        self.api_key = os.getenv('BINANCE_API_KEY', '')
-        self.secret = os.getenv('BINANCE_SECRET', '')
-        self.testnet = self.config.get('testnet', True)
+        self.api_key = os.getenv("BINANCE_API_KEY", "")
+        self.secret = os.getenv("BINANCE_SECRET", "")
+        self.testnet = self.config.get("testnet", True)
         self.exchange = None
         self.connected = False
         self.supports_bracket = False
@@ -22,12 +22,12 @@ class BinanceBroker(Broker):
         if self.connected:
             return
         params = {
-            'apiKey': self.api_key,
-            'secret': self.secret,
-            'enableRateLimit': True,
+            "apiKey": self.api_key,
+            "secret": self.secret,
+            "enableRateLimit": True,
         }
         if self.testnet:
-            params['urls'] = {'api': 'https://testnet.binance.vision/api'}
+            params["urls"] = {"api": "https://testnet.binance.vision/api"}
         self.exchange = ccxt.binance(params)  # type: ignore[arg-type]
         self.exchange.load_markets()
         self.connected = True
@@ -41,49 +41,73 @@ class BinanceBroker(Broker):
             self.connect()
         assert self.exchange is not None
         balance = self.exchange.fetch_balance()
-        total = balance.get('total', {})
+        total = balance.get("total", {})
         usdt_value = 0.0
         for asset, amount in total.items():
             amt = float(str(amount)) if amount else 0.0
             if amt == 0.0:
                 continue
-            if asset == 'USDT':
+            if asset == "USDT":
                 usdt_value += amt
             else:
                 try:
-                    ticker = self.exchange.fetch_ticker(f'{asset}/USDT')
-                    last_price = float(str(ticker['last'])) if ticker.get('last') else 0.0
+                    ticker = self.exchange.fetch_ticker(f"{asset}/USDT")
+                    last_price = (
+                        float(str(ticker["last"])) if ticker.get("last") else 0.0
+                    )
                     usdt_value += amt * last_price
                 except Exception:  # noqa: BLE001, S110
                     pass
-        return {'net_liquidation': usdt_value, 'account': 'Binance', 'unrealized_pnl': 0.0}
+        return {
+            "net_liquidation": usdt_value,
+            "account": "Binance",
+            "unrealized_pnl": 0.0,
+        }
 
-    def place_order(self, symbol: str, side: str, quantity: int,
-                    order_type: str = 'MKT', limit_price: float | None = None,
-                    stop_price: float | None = None) -> dict[str, object]:
+    def place_order(
+        self,
+        symbol: str,
+        side: str,
+        quantity: int,
+        order_type: str = "MKT",
+        limit_price: float | None = None,
+        stop_price: float | None = None,
+    ) -> dict[str, object]:
         if not self.connected:
             self.connect()
         assert self.exchange is not None
-        if order_type.upper() != 'MKT':
+        if order_type.upper() != "MKT":
             raise NotImplementedError("Only market orders for Binance")
-        if side.upper() == 'BUY':
+        if side.upper() == "BUY":
             order = self.exchange.create_market_buy_order(symbol, quantity)
         else:
             order = self.exchange.create_market_sell_order(symbol, quantity)
         log.info(f"Binance order placed: {side} {quantity} {symbol}. ID: {order['id']}")
         return {
-            'order_id': order['id'],
-            'status': order['status'],
-            'filled_quantity': order['filled'],
-            'avg_price': order['average'],
+            "order_id": order["id"],
+            "status": order["status"],
+            "filled_quantity": order["filled"],
+            "avg_price": order["average"],
         }
 
-    def place_bracket_long(self, symbol: str, quantity: int, entry_price: float,
-                           stop_price: float, take_profit: float) -> tuple[int | None, int | None]:
+    def place_bracket_long(
+        self,
+        symbol: str,
+        quantity: int,
+        entry_price: float,
+        stop_price: float,
+        take_profit: float,
+    ) -> tuple[int | None, int | None]:
         raise NotImplementedError
 
-    def place_bracket_short(self, symbol: str, quantity: int, entry_price: float,
-                            stop_price: float, take_profit: float) -> tuple[int | None, int | None]:
+    def place_bracket_short(
+        self,
+        symbol: str,
+        quantity: int,
+        entry_price: float,
+        stop_price: float,
+        take_profit: float,
+    ) -> tuple[int | None, int | None]:
         raise NotImplementedError
 
     def get_stop_order_id(self, parent_id: int) -> int:
@@ -109,10 +133,17 @@ class BinanceBroker(Broker):
         assert self.exchange is not None
         balance = self.exchange.fetch_balance()
         positions = []
-        for asset, amount in balance['total'].items():
+        for asset, amount in balance["total"].items():
             amt = float(str(amount)) if amount else 0.0
             if amt > 0.0:
-                positions.append({'symbol': asset, 'quantity': amt, 'avg_cost': 0.0, 'market_value': 0.0})
+                positions.append(
+                    {
+                        "symbol": asset,
+                        "quantity": amt,
+                        "avg_cost": 0.0,
+                        "market_value": 0.0,
+                    }
+                )
         return positions
 
     def is_shortable(self, symbol: str, quantity: int) -> bool:
@@ -126,11 +157,15 @@ class BinanceBroker(Broker):
         while time.time() - start < timeout:
             try:
                 order = self.exchange.fetch_order(str(order_id), symbol=None)
-                if order['status'] == 'closed':
-                    return {'filled': order['filled'], 'avg_price': order['average'], 'status': 'Filled'}
-                elif order['status'] in ('canceled', 'expired'):
-                    return {'filled': 0, 'status': 'Cancelled'}
+                if order["status"] == "closed":
+                    return {
+                        "filled": order["filled"],
+                        "avg_price": order["average"],
+                        "status": "Filled",
+                    }
+                elif order["status"] in ("canceled", "expired"):
+                    return {"filled": 0, "status": "Cancelled"}
             except Exception:  # noqa: BLE001, S110
                 pass
             time.sleep(1)
-        return {'filled': 0, 'status': 'Timeout'}
+        return {"filled": 0, "status": "Timeout"}

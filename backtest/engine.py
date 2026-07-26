@@ -1,173 +1,317 @@
 # backtest/engine.py
-from dataclasses import dataclass
+"""
+Loop‑based backtester that re‑uses the live engine's strategy classes and
+signal‑resolver logic.  Simulates multi‑strategy, multi‑position trading
+on a single symbol for a given date range, with configurable risk limits,
+slippage, and commissions.
+"""
 
 import numpy as np
 import pandas as pd
 
-from data.manager import DataManager
+from risk.manager import RiskManager
+from risk.position_manager import Position, PositionManager
+from strategies.mean_revisions import MeanReversion
 from strategies.signals import Signal
+from strategies.trend_following_long_only import TrendFollowingLongOnly
+from strategies.trend_following_ls import TrendFollowingLS
+from utils.config import CONFIG
 
-
-@dataclass
-class BacktestPosition:
-    symbol: str
-    side: str
-    quantity: int
-    entry_price: float
-    stop_loss: float
-    take_profit: float | None = None
 
 class BacktestEngine:
-    def __init__(self, config: dict, strategies: list):
-        self.config = config
-        self.strategies = strategies
-        exec_cfg = config['execution']
-        self.slippage = exec_cfg.get('slippage_percent', 0.0005)
-        self.comm_per_share = exec_cfg['commission_per_share']
-        self.comm_min = exec_cfg['commission_min']
-        self.comm_max_pct = exec_cfg['commission_max_pct']
-        self.partial_fill = exec_cfg.get('simulate_partial_fills', False)
-        self.partial_min = exec_cfg.get('partial_fill_min_ratio', 0.8)
-        risk_cfg = config['risk_management']
-        self.vol_stop_mult = risk_cfg['volatility_stop_multiplier']
-        self.risk_per_trade = risk_cfg['max_capital_per_trade']
+    """Vectorised signal generation + step‑by‑step portfolio simulation."""
 
+    def __init__(
+        self,
+        strategy_params: dict | None = None,
+        risk_config: dict | None = None,
+        initial_capital: float = 1_000_000.0,
+    ):
+        self.initial_capital = initial_capital
+        self.risk_config = risk_config or CONFIG.get("risk_management", {})
+        self.execution_config = CONFIG.get("execution", {})
+
+        # Build strategies (same as live engine)
+        intraday_params = CONFIG["strategies"]["parameters"].get("intraday", {})
+        self.strategies = []
+        for strat_cfg in CONFIG["strategies"]["active"]:
+            if not strat_cfg.get("enabled", False):
+                continue
+            name = strat_cfg["name"]
+            params_key = name.lower().replace(" ", "_")
+            if name == "TrendFollowingLongOnly":
+                params_key = "trend_following_long_only"
+            # Ensure params is always a dict
+            params = (
+                (strategy_params.get(params_key) if strategy_params else None)
+                or intraday_params.get(params_key)
+                or CONFIG["strategies"]["parameters"].get(params_key)
+                or {}
+            )
+            if name in ("TrendFollowing", "TrendFollowingLS"):
+                self.strategies.append(TrendFollowingLS(params))
+            elif name == "TrendFollowingLongOnly":
+                self.strategies.append(TrendFollowingLongOnly(params))
+            elif name == "MeanReversion":
+                self.strategies.append(MeanReversion(params))
+
+        self.position_manager = PositionManager()
+        self.risk_manager = RiskManager(
+            initial_capital, position_manager=self.position_manager
+        )
+        self.trade_results = []  # (win/loss, pnl_frac)
+
+        self.equity_curve = []
+        self.trade_log = []
+
+    # ------------------------------------------------------------------
+    # Helpers (mirror live engine)
+    # ------------------------------------------------------------------
     def _apply_slippage(self, price: float, action: str) -> float:
-        if action in ('BUY', 'BUY_TO_COVER'):
-            return price * (1 + self.slippage)
+        if not self.execution_config.get("simulate_slippage", False):
+            return price
+        slip = self.execution_config.get("slippage_percent", 0.0005)
+        return (
+            price * (1 + slip)
+            if action in ("BUY", "BUY_TO_COVER")
+            else price * (1 - slip)
+        )
+
+    def _calculate_commission(self, quantity: int, price: float) -> float:
+        if not self.execution_config.get("simulate_commissions", False):
+            return 0.0
+        trade_value = quantity * price
+        per_share = quantity * self.execution_config["commission_per_share"]
+        minimum = self.execution_config["commission_min"]
+        maximum = trade_value * self.execution_config["commission_max_pct"]
+        return max(minimum, min(per_share, maximum))
+
+    def _kelly_fraction(self) -> float:
+        if len(self.trade_results) < 5:
+            return 0.02
+        wins = [r[1] for r in self.trade_results if r[0] == "win"]
+        losses = [abs(r[1]) for r in self.trade_results if r[0] == "loss"]
+        if not wins or not losses:
+            return 0.02
+        win_rate = len(wins) / len(self.trade_results)
+        avg_win = np.mean(wins) if wins else 0.01
+        avg_loss = np.mean(losses) if losses else 0.01
+        if avg_loss == 0:
+            return 0.02
+        kelly = win_rate - ((1 - win_rate) / (avg_win / avg_loss))
+        return float(max(0.0, min(kelly * 0.5, 0.05)))
+
+    # ------------------------------------------------------------------
+    # Resolver (exactly the same as updated live engine)
+    # ------------------------------------------------------------------
+    def _resolve_signal(self, signals_set: set, current_side: str | None):
+        action = None
+        if current_side == "BUY":
+            if Signal.EXIT_LONG in signals_set:
+                action = "SELL"
+            elif Signal.ENTER_SHORT in signals_set:
+                action = "SELL"  # close long first
+        elif current_side == "SELL":
+            if Signal.EXIT_SHORT in signals_set:
+                action = "BUY_TO_COVER"
+            elif Signal.ENTER_LONG in signals_set:
+                action = "BUY_TO_COVER"  # cover short first
         else:
-            return price * (1 - self.slippage)
+            if Signal.ENTER_LONG in signals_set and Signal.ENTER_SHORT in signals_set:
+                pass  # conflict, no action
+            elif Signal.ENTER_LONG in signals_set:
+                action = "BUY"
+            elif Signal.ENTER_SHORT in signals_set:
+                action = "SELL_SHORT"
+        return action
 
-    def _commission(self, qty: int, price: float) -> float:
-        trade_value = qty * price
-        per_share = qty * self.comm_per_share
-        return max(self.comm_min, min(per_share, trade_value * self.comm_max_pct))
-
-    def _simulate_fill(self, qty: int) -> int:
-        if not self.partial_fill:
-            return qty
-        ratio = np.random.uniform(self.partial_min, 1.0)
-        return max(1, int(qty * ratio))
-
-    def backtest_symbol(self, symbol: str, start_date: str, end_date: str,
-                        initial_capital: float = 100000.0) -> pd.DataFrame:
-        dm = DataManager()
-        df = dm.get_data(symbol, start_date, end_date, interval='1d')
+    # ------------------------------------------------------------------
+    # Main backtest loop for one symbol
+    # ------------------------------------------------------------------
+    def run(
+        self,
+        symbol: str,
+        df: pd.DataFrame,
+        start_date: str | None = None,
+        end_date: str | None = None,
+    ) -> dict:
+        """
+        Parameters
+        ----------
+        symbol : str
+        df : pd.DataFrame
+            Must contain OHLCV columns and a datetime index.
+        """
+        if start_date:
+            df = df.loc[start_date:]
+        if end_date:
+            df = df.loc[:end_date]
         if df.empty:
-            return pd.DataFrame()
+            return {"error": "No data"}
 
-        # Generate signals for all strategies
-        signals = {}
-        for s in self.strategies:
-            sig = s.generate_signals(df)
-            signals[s.__class__.__name__] = sig
+        self.position_manager = PositionManager()
+        self.risk_manager = RiskManager(
+            self.initial_capital, position_manager=self.position_manager
+        )
+        self.trade_results = []
+        equity = [self.initial_capital]
+        dates = [df.index[0]]
+        capital = self.initial_capital
 
-        position = None
-        trades = []
-        capital = initial_capital
-
-        for i in range(len(df)):
+        for i in range(1, len(df)):
             date = df.index[i]
-            price = df['close'].iloc[i]
+            price = df["close"].iloc[i]
 
-            enter_long = any(sig.iloc[i] == Signal.ENTER_LONG for sig in signals.values())
-            exit_long  = any(sig.iloc[i] == Signal.EXIT_LONG  for sig in signals.values())
-            enter_short= any(sig.iloc[i] == Signal.ENTER_SHORT for sig in signals.values())
-            exit_short = any(sig.iloc[i] == Signal.EXIT_SHORT for sig in signals.values())
-
-            current_side = position.side if position else None
-            action = None
-
-            if exit_long and current_side == 'BUY':
-                action = 'SELL'
-            elif exit_short and current_side == 'SELL':
-                action = 'BUY_TO_COVER'
-            elif enter_long and current_side is None:
-                action = 'BUY'
-            elif enter_long and current_side == 'SELL':
-                action = 'BUY_TO_COVER'
-            elif enter_short and current_side is None:
-                action = 'SELL_SHORT'
-            elif enter_short and current_side == 'BUY':
-                action = 'SELL'
-
-            atr = (df['high'] - df['low']).rolling(14).mean().iloc[i]
-
-            if action and position is None:   # new entry
-                if action == 'BUY':
-                    stop_loss = price - (atr * self.vol_stop_mult)
-                    tp = price + (atr * self.vol_stop_mult * 2)
-                    risk_amount = capital * self.risk_per_trade
-                    qty = int(risk_amount / (atr * self.vol_stop_mult)) if atr > 0 else 10
-                    qty = max(1, self._simulate_fill(qty))
-                    entry = self._apply_slippage(price, 'BUY')
-                    comm = self._commission(qty, entry)
-                    position = BacktestPosition(symbol, 'BUY', qty, entry + comm/qty, stop_loss, tp)
-                elif action == 'SELL_SHORT':
-                    stop_loss = price + (atr * self.vol_stop_mult)
-                    tp = price - (atr * self.vol_stop_mult * 2)
-                    risk_amount = capital * self.risk_per_trade
-                    qty = int(risk_amount / (atr * self.vol_stop_mult)) if atr > 0 else 10
-                    qty = max(1, self._simulate_fill(qty))
-                    entry = self._apply_slippage(price, 'SELL_SHORT')
-                    comm = self._commission(qty, entry)
-                    position = BacktestPosition(symbol, 'SELL', qty, entry - comm/qty, stop_loss, tp)
-
-            elif action and position:   # close existing position
-                exit_price = self._apply_slippage(price, action)
-                comm = self._commission(position.quantity, exit_price)
-                net_exit = exit_price + (comm / position.quantity) if action == 'BUY_TO_COVER' else exit_price - (comm / position.quantity)
-                if position.side == 'BUY':
-                    pnl = (net_exit - position.entry_price) * position.quantity
+            # Update trailing stops (simplified: check stop levels)
+            for sym, pos in list(self.position_manager.positions.items()):
+                if pos.side == "BUY":
+                    new_stop = max(pos.stop_loss, price * 0.98)  # 2% trail
                 else:
-                    pnl = (position.entry_price - net_exit) * position.quantity
-                capital += pnl
-                trades.append({'date': date, 'symbol': symbol, 'action': action, 'pnl': pnl})
-                position = None
+                    new_stop = min(pos.stop_loss, price * 1.02)
+                if abs(new_stop - pos.stop_loss) > 0.01:
+                    pos.stop_loss = new_stop
 
-            # Stop‑loss / take‑profit check
-            if position:
-                hit = False
-                if position.side == 'BUY':
-                    if price <= position.stop_loss:
-                        exit_price = position.stop_loss
-                        hit = True
-                    elif position.take_profit and price >= position.take_profit:
-                        exit_price = position.take_profit
-                        hit = True
-                else:
-                    if price >= position.stop_loss:
-                        exit_price = position.stop_loss
-                        hit = True
-                    elif position.take_profit and price <= position.take_profit:
-                        exit_price = position.take_profit
-                        hit = True
-                if hit:
-                    comm = self._commission(position.quantity, exit_price)
-                    net_exit = exit_price + (comm / position.quantity) if position.side == 'SELL' else exit_price - (comm / position.quantity)
-                    if position.side == 'BUY':
-                        pnl = (net_exit - position.entry_price) * position.quantity
-                    else:
-                        pnl = (position.entry_price - net_exit) * position.quantity
+                # Check stop‑loss hit
+                if (pos.side == "BUY" and price <= pos.stop_loss) or (
+                    pos.side == "SELL" and price >= pos.stop_loss
+                ):
+                    pnl = (
+                        (price - pos.entry_price) * pos.quantity
+                        if pos.side == "BUY"
+                        else (pos.entry_price - price) * pos.quantity
+                    )
                     capital += pnl
-                    trades.append({'date': date, 'symbol': symbol, 'action': 'STOP/TP', 'pnl': pnl})
-                    position = None
+                    self.trade_results.append(
+                        (
+                            "win" if pnl > 0 else "loss",
+                            pnl / (pos.entry_price * pos.quantity),
+                        )
+                    )
+                    self.trade_log.append(
+                        (
+                            date,
+                            symbol,
+                            "STOP_OUT",
+                            pos.quantity,
+                            pos.entry_price,
+                            price,
+                            pnl,
+                        )
+                    )
+                    self.position_manager.close_position(sym)
 
-        return pd.DataFrame(trades) if trades else pd.DataFrame()
+            # Generate signals (only when we have enough data)
+            if i < 50:
+                equity.append(capital)
+                dates.append(date)
+                continue
 
-    def run(self, symbols: list[str], start_date: str, end_date: str,
-            initial_capital: float = 100000.0) -> dict:
-        results = {}
-        for sym in symbols:
-            trades = self.backtest_symbol(sym, start_date, end_date, initial_capital)
-            if not trades.empty:
-                total_pnl = trades['pnl'].sum()
-                wins = (trades['pnl'] > 0).sum()
-                win_rate = wins / len(trades) if len(trades) else 0
-                results[sym] = {
-                    'total_trades': len(trades),
-                    'win_rate': win_rate,
-                    'total_pnl': total_pnl,
-                    'avg_pnl_per_trade': trades['pnl'].mean(),
-                }
-        return results
+            # Slice data up to current index
+            window_df = df.iloc[: i + 1]
+            signals = []
+            for strat in self.strategies:
+                raw = strat.generate_signals(window_df).iloc[-1]
+                if isinstance(raw, str):
+                    try:
+                        raw = Signal(raw.upper())
+                    except ValueError:
+                        raw = Signal.HOLD
+                signals.append(raw)
+            signals_set = {s for s in signals if s != Signal.HOLD}
+
+            # Determine current side
+            pos = self.position_manager.positions.get(symbol)
+            current_side = pos.side if pos else None
+
+            action = self._resolve_signal(signals_set, current_side)
+
+            if action is None:
+                equity.append(capital)
+                dates.append(date)
+                continue
+
+            # --- Exit actions ---
+            if action in ("SELL", "BUY_TO_COVER"):
+                if not pos:
+                    equity.append(capital)
+                    dates.append(date)
+                    continue
+                qty = pos.quantity
+                # Execute exit with slippage & commission
+                fill_price = self._apply_slippage(price, action)
+                commission = self._calculate_commission(qty, fill_price)
+                pnl = (
+                    ((fill_price - pos.entry_price) * qty)
+                    if pos.side == "BUY"
+                    else ((pos.entry_price - fill_price) * qty)
+                )
+                pnl -= commission
+                capital += pnl
+                pnl_frac = pnl / (pos.entry_price * qty)
+                self.trade_results.append(("win" if pnl > 0 else "loss", pnl_frac))
+                self.trade_log.append(
+                    (date, symbol, action, qty, pos.entry_price, fill_price, pnl)
+                )
+                self.position_manager.close_position(symbol)
+
+            # --- Entry actions ---
+            else:  # BUY or SELL_SHORT
+                # Basic risk checks (simplified but respects config)
+                atr = (window_df["high"] - window_df["low"]).rolling(14).mean().iloc[-1]
+                vol_mult = self.risk_config.get("volatility_stop_multiplier", 2.0)
+                stop = (
+                    price - (atr * vol_mult)
+                    if action == "BUY"
+                    else price + (atr * vol_mult)
+                )
+                risk_per_share = abs(price - stop)
+                if risk_per_share == 0:
+                    continue
+                kelly = self._kelly_fraction()
+                quantity = int((capital * kelly) / risk_per_share)
+                if quantity <= 0:
+                    continue
+
+                # Ensure notional doesn't exceed single-name limit
+                max_single = capital * self.risk_config.get("max_position_pct", 0.2)
+                if quantity * price > max_single:
+                    quantity = int(max_single / price)
+                if quantity <= 0:
+                    continue
+
+                # Execute entry
+                fill_price = self._apply_slippage(price, action)
+                commission = self._calculate_commission(quantity, fill_price)
+                entry_cost = quantity * fill_price + commission
+                capital -= entry_cost
+
+                # Open position
+                side = "BUY" if action == "BUY" else "SELL"
+                self.position_manager.open_position(
+                    Position(
+                        symbol=symbol,
+                        side=side,
+                        quantity=quantity,
+                        entry_price=fill_price,
+                        stop_loss=stop,
+                        entry_time=date,
+                    )
+                )
+
+            # Record equity (unrealized P&L)
+            unrealized = 0.0
+            for sym, p in self.position_manager.positions.items():
+                if p.side == "BUY":
+                    unrealized += (price - p.entry_price) * p.quantity
+                else:
+                    unrealized += (p.entry_price - price) * p.quantity
+            total_equity = capital + unrealized
+            equity.append(total_equity)
+            dates.append(date)
+
+        return {
+            "equity_curve": pd.Series(equity, index=dates),
+            "trades": self.trade_log,
+            "final_capital": equity[-1],
+            "total_trades": len(self.trade_log),
+        }
