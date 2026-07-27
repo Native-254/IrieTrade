@@ -1,30 +1,29 @@
 # execution/binance_broker.py
-import os
 import time
 
 import ccxt
 
 from execution.broker import Broker
 from utils.logger import log
+from utils.security import safe_env
 
 
 class BinanceBroker(Broker):
     def __init__(self, config: dict):
         self.config = config
-        self.api_key = os.getenv("BINANCE_API_KEY", "")
-        self.secret = os.getenv("BINANCE_SECRET", "")
+        self.api_key = safe_env("BINANCE_API_KEY") or ""
+        self.secret = safe_env("BINANCE_SECRET") or ""
         self.testnet = self.config.get("testnet", True)
         self.exchange = None
         self.connected = False
         self.supports_bracket = False
 
     def connect(self):
-        if self.connected:
-            return
         params = {
             "apiKey": self.api_key,
             "secret": self.secret,
             "enableRateLimit": True,
+            "options": {"defaultType": "spot"},
         }
         if self.testnet:
             params["urls"] = {"api": "https://testnet.binance.vision/api"}

@@ -527,27 +527,23 @@ async def setup_save(request: Request):
                 val = credentials[broker]["account_id"]
                 f.write(f"IB_ACCOUNT_ID={encrypt(val)}\n")
             elif broker == "binance":
-                f.write(f"BINANCE_API_KEY={credentials[broker]['api_key']}\n")
-                f.write(f"BINANCE_SECRET={credentials[broker]['secret']}\n")
+                f.write(f"BINANCE_API_KEY={encrypt(credentials[broker]['api_key'])}\n")
+                f.write(f"BINANCE_SECRET={encrypt(credentials[broker]['secret'])}\n")
             elif broker == "okx":
-                f.write(f"OKX_API_KEY={credentials[broker]['api_key']}\n")
-                f.write(f"OKX_SECRET={credentials[broker]['secret']}\n")
-                f.write(f"OKX_PASSPHRASE={credentials[broker].get('passphrase', '')}\n")
+                f.write(f"OKX_API_KEY={encrypt(credentials[broker]['api_key'])}\n")
+                f.write(f"OKX_SECRET={encrypt(credentials[broker]['secret'])}\n")
+                f.write(f"OKX_PASSPHRASE={encrypt(credentials[broker].get('passphrase', ''))}\n")
             elif broker == "coinbase":
-                f.write(f"COINBASE_API_KEY={credentials[broker]['api_key']}\n")
-                f.write(f"COINBASE_SECRET={credentials[broker]['secret']}\n")
-                f.write(
-                    f"COINBASE_PASSPHRASE={credentials[broker].get('passphrase', '')}\n"
-                )
+                f.write(f"COINBASE_API_KEY={encrypt(credentials[broker]['api_key'])}\n")
+                f.write(f"COINBASE_SECRET={encrypt(credentials[broker]['secret'])}\n")
+                f.write(f"COINBASE_PASSPHRASE={encrypt(credentials[broker].get('passphrase', ''))}\n")
             elif broker == "kraken":
-                f.write(f"KRAKEN_API_KEY={credentials[broker]['api_key']}\n")
-                f.write(f"KRAKEN_SECRET={credentials[broker]['secret']}\n")
+                f.write(f"KRAKEN_API_KEY={encrypt(credentials[broker]['api_key'])}\n")
+                f.write(f"KRAKEN_SECRET={encrypt(credentials[broker]['secret'])}\n")
             elif broker == "kucoin":
-                f.write(f"KUCOIN_API_KEY={credentials[broker]['api_key']}\n")
-                f.write(f"KUCOIN_SECRET={credentials[broker]['secret']}\n")
-                f.write(
-                    f"KUCOIN_PASSPHRASE={credentials[broker].get('passphrase', '')}\n"
-                )
+                f.write(f"KUCOIN_API_KEY={encrypt(credentials[broker]['api_key'])}\n")
+                f.write(f"KUCOIN_SECRET={encrypt(credentials[broker]['secret'])}\n")
+                f.write(f"KUCOIN_PASSPHRASE={encrypt(credentials[broker].get('passphrase', ''))}\n")
 
     # 2. Update settings.yaml with brokers and symbols
     config_path = Path("config/settings.yaml")

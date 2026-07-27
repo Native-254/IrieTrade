@@ -1,11 +1,11 @@
 # execution/kraken_broker.py
-import os
 import time
 
 import ccxt
 
 from execution.broker import Broker
 from utils.logger import log
+from utils.security import safe_env
 
 
 class KrakenBroker(Broker):
@@ -13,8 +13,8 @@ class KrakenBroker(Broker):
 
     def __init__(self, config: dict):
         self.config = config
-        self.api_key = os.getenv("KRAKEN_API_KEY", "")
-        self.secret = os.getenv("KRAKEN_SECRET", "")
+        self.api_key = safe_env("KRAKEN_API_KEY") or ""
+        self.secret = safe_env("KRAKEN_SECRET") or ""
         self.testnet = self.config.get("testnet", True)
         self.exchange = None
         self.connected = False

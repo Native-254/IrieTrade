@@ -1,11 +1,11 @@
 # execution/coinbase_broker.py
-import os
 import time
 
 import ccxt
 
 from execution.broker import Broker
 from utils.logger import log
+from utils.security import safe_env
 
 
 class CoinbaseBroker(Broker):
@@ -13,9 +13,9 @@ class CoinbaseBroker(Broker):
 
     def __init__(self, config: dict):
         self.config = config
-        self.api_key = os.getenv("COINBASE_API_KEY", "")
-        self.secret = os.getenv("COINBASE_SECRET", "")
-        self.password = os.getenv("COINBASE_PASSPHRASE", "")
+        self.api_key = safe_env("COINBASE_API_KEY") or ""
+        self.secret = safe_env("COINBASE_SECRET") or ""
+        self.password = safe_env("COINBASE_PASSPHRASE") or ""
         self.testnet = self.config.get("testnet", True)
         self.exchange = None
         self.connected = False
@@ -56,7 +56,6 @@ class CoinbaseBroker(Broker):
             amt = float(str(amount)) if amount else 0.0
             if amt == 0.0:
                 continue
-            # Try multiple quote assets in order of preference
             if asset in ("USD", "USDT", "USDC"):
                 usd_value += amt
             else:

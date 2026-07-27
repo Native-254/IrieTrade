@@ -20,9 +20,11 @@ from monitoring.telegram_alerter import TelegramAlerter
 from risk.manager import RiskManager
 from risk.position_manager import Position, PositionManager
 from strategies.mean_revisions import MeanReversion
+from strategies.orb import OpeningRangeBreakout
 from strategies.signals import Signal
 from strategies.trend_following_long_only import TrendFollowingLongOnly
 from strategies.trend_following_ls import TrendFollowingLS
+from strategies.vwap_revisions import VWAPReversion
 from utils.config import CONFIG
 from utils.logger import log
 
@@ -93,6 +95,10 @@ class TradingEngine:
                 self.strategies.append(TrendFollowingLongOnly(params))
             elif name == "MeanReversion":
                 self.strategies.append(MeanReversion(params))
+            elif name == "VWAPReversion":
+                self.strategies.append(VWAPReversion(params))
+            elif name == "OpeningRangeBreakout":
+                self.strategies.append(OpeningRangeBreakout(params))
             elif name == "Breakout":
                 log.warning("Breakout strategy not implemented – skipping.")
             else:
@@ -605,7 +611,7 @@ class TradingEngine:
             rm.recalc_open_risk(latest_prices)
 
             # ------------------------------------------------------------------
-            # NEW: Signal generation & trade entry / exit (position‑aware resolver)
+            # Signal generation & trade entry / exit (position‑aware resolver)
             # ------------------------------------------------------------------
             for symbol in symbols:
                 # Determine current side from PositionManager

@@ -1,19 +1,19 @@
 # execution/okx_broker.py
-import os
 import time
 
 import ccxt
 
 from execution.broker import Broker
 from utils.logger import log
+from utils.security import safe_env
 
 
 class OKXBroker(Broker):
     def __init__(self, config: dict):
         self.config = config
-        self.api_key = os.getenv("OKX_API_KEY", "")
-        self.secret = os.getenv("OKX_SECRET", "")
-        self.password = os.getenv("OKX_PASSPHRASE", "")
+        self.api_key = safe_env("OKX_API_KEY") or ""
+        self.secret = safe_env("OKX_SECRET") or ""
+        self.password = safe_env("OKX_PASSPHRASE") or ""
         self.testnet = self.config.get("testnet", True)
         self.exchange = None
         self.connected = False

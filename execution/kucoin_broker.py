@@ -1,11 +1,11 @@
 # execution/kucoin_broker.py
-import os
 import time
 
 import ccxt
 
 from execution.broker import Broker
 from utils.logger import log
+from utils.security import safe_env
 
 
 class KucoinBroker(Broker):
@@ -13,9 +13,9 @@ class KucoinBroker(Broker):
 
     def __init__(self, config: dict):
         self.config = config
-        self.api_key = os.getenv("KUCOIN_API_KEY", "")
-        self.secret = os.getenv("KUCOIN_SECRET", "")
-        self.password = os.getenv("KUCOIN_PASSPHRASE", "")
+        self.api_key = safe_env("KUCOIN_API_KEY") or ""
+        self.secret = safe_env("KUCOIN_SECRET") or ""
+        self.password = safe_env("KUCOIN_PASSPHRASE") or ""
         self.testnet = self.config.get("testnet", True)
         self.exchange = None
         self.connected = False
