@@ -6,6 +6,7 @@ import time
 from datetime import datetime, timedelta, timezone
 
 import numpy as np
+import pandas as pd
 import schedule
 import uvicorn
 import yfinance as yf
@@ -138,6 +139,35 @@ class TradingEngine:
         self.__init__(config=new_config)
 
     # ------------------------------------------------------------------
+    # Crypto data fetcher (uses ccxt broker directly)
+    # ------------------------------------------------------------------
+    def _get_crypto_data(self, broker, symbol: str, limit: int = 200) -> pd.DataFrame:
+        """Fetch OHLCV from a ccxt broker for crypto pairs."""
+        if not hasattr(broker, 'exchange') or broker.exchange is None:
+            broker.connect()
+        if broker.exchange is None:   # <-- explicit guard against None
+            log.warning(f"Could not connect to broker for crypto data: {symbol}")
+            return pd.DataFrame()
+        try:
+            ohlcv = broker.exchange.fetch_ohlcv(symbol, timeframe='15m', limit=limit)
+            if not ohlcv:
+                return pd.DataFrame()
+            df = pd.DataFrame(
+                ohlcv,
+                columns=['timestamp', 'open', 'high', 'low', 'close', 'volume']
+            )
+            df['timestamp'] = pd.to_datetime(df['timestamp'], unit='ms', utc=True)
+            df.set_index('timestamp', inplace=True)
+            return df
+        except Exception as e:  # noqa: BLE001
+            log.warning(f"Failed to fetch crypto data for {symbol}: {e}")
+            return pd.DataFrame()
+
+    def _is_crypto(self, symbol: str) -> bool:
+        """Heuristic: crypto pairs contain a '/'."""
+        return '/' in symbol
+
+    # ------------------------------------------------------------------
     # Shared helpers
     # ------------------------------------------------------------------
     def _apply_slippage(self, price: float, action: str) -> float:
@@ -217,6 +247,9 @@ class TradingEngine:
         return broker.is_shortable(symbol, quantity)
 
     def _earnings_nearby(self, symbol: str) -> bool:
+        # Crypto symbols don't have earnings; skip immediately
+        if self._is_crypto(symbol):
+            return False
         if not self.config["execution"].get("earnings_avoidance", False):
             return False
         try:
@@ -567,13 +600,16 @@ class TradingEngine:
             # Trailing stops & price collection
             now_utc = datetime.now(timezone.utc)
             for sym, pos in pm.positions.items():
-                df = self.data_manager.get_data(
-                    sym,
-                    start_date=(now_utc - timedelta(days=1)).strftime("%Y-%m-%d"),
-                    end_date=now_utc.strftime("%Y-%m-%d"),
-                    interval="15m",
-                    force_refresh=True,
-                )
+                if self._is_crypto(sym):
+                    df = self._get_crypto_data(broker, sym, limit=200)
+                else:
+                    df = self.data_manager.get_data(
+                        sym,
+                        start_date=(now_utc - timedelta(days=1)).strftime("%Y-%m-%d"),
+                        end_date=now_utc.strftime("%Y-%m-%d"),
+                        interval="15m",
+                        force_refresh=True,
+                    )
                 if df.empty:
                     continue
                 last_price = df["close"].iloc[-1]
@@ -618,13 +654,16 @@ class TradingEngine:
                 pos = pm.positions.get(symbol)
                 current_side = pos.side if pos else None
 
-                df = self.data_manager.get_data(
-                    symbol,
-                    start_date=(now_utc - timedelta(days=7)).strftime("%Y-%m-%d"),
-                    end_date=now_utc.strftime("%Y-%m-%d"),
-                    interval="15m",
-                    force_refresh=True,
-                )
+                if self._is_crypto(symbol):
+                    df = self._get_crypto_data(broker, symbol, limit=200)
+                else:
+                    df = self.data_manager.get_data(
+                        symbol,
+                        start_date=(now_utc - timedelta(days=7)).strftime("%Y-%m-%d"),
+                        end_date=now_utc.strftime("%Y-%m-%d"),
+                        interval="15m",
+                        force_refresh=True,
+                    )
                 if df.empty:
                     continue
                 last_price = df["close"].iloc[-1]
@@ -652,7 +691,6 @@ class TradingEngine:
                     if Signal.EXIT_LONG in signals_set:
                         action = "SELL"
                     elif Signal.ENTER_SHORT in signals_set:
-                        # Conflict: short entry while long → close long first
                         action = "SELL"
                         log.info(
                             f"Conflict resolved for {symbol}: closing long before possible short entry."
@@ -661,7 +699,6 @@ class TradingEngine:
                     if Signal.EXIT_SHORT in signals_set:
                         action = "BUY_TO_COVER"
                     elif Signal.ENTER_LONG in signals_set:
-                        # Conflict: long entry while short → cover short first
                         action = "BUY_TO_COVER"
                         log.info(
                             f"Conflict resolved for {symbol}: covering short before possible long entry."
@@ -682,7 +719,6 @@ class TradingEngine:
                 if action is None:
                     continue
 
-                # Log the resolution
                 reasons = [s.name for s in signals_set]
                 log.info(
                     f"Resolved {symbol} ({broker_name}): {reasons} -> {action} (current side={current_side})"
@@ -717,7 +753,7 @@ class TradingEngine:
                         self.discord.send_trade_alert(
                             symbol, action, quantity, last_price
                         )
-                    continue  # do not attempt entry in the same iteration
+                    continue
 
                 # ---------- Entry execution (BUY, SELL_SHORT) ----------
                 atr = (df["high"] - df["low"]).rolling(14).mean().iloc[-1]
@@ -741,7 +777,6 @@ class TradingEngine:
                 if quantity == 0:
                     continue
 
-                # --- Gross exposure cap ---
                 proposed_notional = quantity * last_price
                 current_gross = rm.get_gross_exposure(latest_prices)
                 new_gross = current_gross + proposed_notional
@@ -752,7 +787,6 @@ class TradingEngine:
                     log.warning(f"Gross exposure limit for {symbol}")
                     continue
 
-                # --- Single‑name limit ---
                 max_single = capital * self.config["risk_management"].get(
                     "max_position_pct", 0.2
                 )
@@ -762,7 +796,6 @@ class TradingEngine:
                     log.warning(f"Single-name limit for {symbol}")
                     continue
 
-                # --- Risk manager validation ---
                 order_valid, msg = rm.validate_order(
                     symbol, action, quantity, last_price, stop_loss
                 )
@@ -770,14 +803,12 @@ class TradingEngine:
                     log.warning(f"Order rejected: {msg}")
                     continue
 
-                # --- Net exposure check ---
                 if not self._check_net_exposure(
                     rm, action, quantity, last_price, latest_prices
                 ):
                     log.warning(f"Net exposure limit for {symbol}")
                     continue
 
-                # --- Earnings blackout (new positions only) ---
                 if self._earnings_nearby(symbol):
                     log.warning(f"Earnings nearby for {symbol}, skipping.")
                     continue
