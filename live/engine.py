@@ -48,16 +48,20 @@ class TradingEngine:
         self.symbols_by_broker: dict[str, list[str]] = {}
         self.broker_latest_prices: dict[str, dict] = {}
         self.broker_last_logged_qty: dict[str, dict[str, int]] = {}
+        self.broker_available: dict[str, bool] = {}
 
         for broker_name, broker in self.broker_manager.iterate_all():
             try:
                 account = broker.get_account_info()
                 capital = account["net_liquidation"]
+                self.broker_available[broker_name] = True
             except Exception as e:  # noqa: BLE001
                 log.warning(
-                    f"Could not fetch account info for {broker_name}: {e}. Using default capital."
+                    f"Broker '{broker_name}' is not available: {e}. It will be skipped."
                 )
-                capital = 100000.0
+                self.broker_available[broker_name] = False
+                continue
+
             pm = PositionManager()
             rm = RiskManager(capital, position_manager=pm)
             self.risk_managers[broker_name] = rm
@@ -71,6 +75,9 @@ class TradingEngine:
             self.symbols_by_broker[broker_name] = symbols
             self.broker_latest_prices[broker_name] = {}
             self.broker_last_logged_qty[broker_name] = {}
+
+        if not self.risk_managers:
+            log.error("No brokers available. Bot will idle until a broker connects.")
 
         self.trade_results: list[tuple[str, float]] = []
         self.equity_history: list[tuple[datetime, float]] = []
@@ -124,6 +131,7 @@ class TradingEngine:
 
         self.position_managers.clear()
         self.risk_managers.clear()
+        self.broker_available.clear()
         schedule.clear()
         self.is_running = False
         self.trade_results.clear()
@@ -145,7 +153,7 @@ class TradingEngine:
         """Fetch OHLCV from a ccxt broker for crypto pairs."""
         if not hasattr(broker, 'exchange') or broker.exchange is None:
             broker.connect()
-        if broker.exchange is None:   # <-- explicit guard against None
+        if broker.exchange is None:
             log.warning(f"Could not connect to broker for crypto data: {symbol}")
             return pd.DataFrame()
         try:
@@ -247,7 +255,6 @@ class TradingEngine:
         return broker.is_shortable(symbol, quantity)
 
     def _earnings_nearby(self, symbol: str) -> bool:
-        # Crypto symbols don't have earnings; skip immediately
         if self._is_crypto(symbol):
             return False
         if not self.config["execution"].get("earnings_avoidance", False):
@@ -577,13 +584,24 @@ class TradingEngine:
         all_latest_prices = {}
 
         for broker_name, broker in self.broker_manager.iterate_all():
+            # Skip brokers that were unavailable at startup
+            if broker_name not in self.risk_managers:
+                log.info(f"Skipping '{broker_name}' – not available.")
+                continue
+
             rm = self.risk_managers[broker_name]
             pm = self.position_managers[broker_name]
             symbols = self.symbols_by_broker[broker_name]
             last_logged_qty = self.broker_last_logged_qty.setdefault(broker_name, {})
 
-            account = broker.get_account_info()
-            capital = account["net_liquidation"]
+            # Try to refresh account info; if it fails, skip this iteration for this broker
+            try:
+                account = broker.get_account_info()
+                capital = account["net_liquidation"]
+            except Exception as e:  # noqa: BLE001
+                log.warning(f"Could not reach '{broker_name}': {e}. Skipping iteration.")
+                continue
+
             rm.update_portfolio(capital - rm.current_capital, 0)
             if not rm.can_trade():
                 log.warning(f"Trading halted for {broker_name}")
@@ -650,7 +668,6 @@ class TradingEngine:
             # Signal generation & trade entry / exit (position‑aware resolver)
             # ------------------------------------------------------------------
             for symbol in symbols:
-                # Determine current side from PositionManager
                 pos = pm.positions.get(symbol)
                 current_side = pos.side if pos else None
 
@@ -669,7 +686,6 @@ class TradingEngine:
                 last_price = df["close"].iloc[-1]
                 latest_prices[symbol] = last_price
 
-                # Collect signals from all active strategies
                 signals_to_resolve = []
                 for strategy in self.strategies:
                     raw = strategy.generate_signals(df).iloc[-1]
@@ -685,7 +701,7 @@ class TradingEngine:
                     if isinstance(s, Signal) and s != Signal.HOLD
                 }
 
-                # ---------- Resolver (Position‑Aware, Conflict‑Aware) ----------
+                # ---------- Resolver ----------
                 action = None
                 if current_side == "BUY":
                     if Signal.EXIT_LONG in signals_set:
@@ -703,7 +719,7 @@ class TradingEngine:
                         log.info(
                             f"Conflict resolved for {symbol}: covering short before possible long entry."
                         )
-                else:  # flat
+                else:
                     if (
                         Signal.ENTER_LONG in signals_set
                         and Signal.ENTER_SHORT in signals_set
@@ -724,7 +740,6 @@ class TradingEngine:
                     f"Resolved {symbol} ({broker_name}): {reasons} -> {action} (current side={current_side})"
                 )
 
-                # ---------- Exit execution ----------
                 if action in ("SELL", "BUY_TO_COVER"):
                     if not pos:
                         log.warning(
@@ -755,7 +770,6 @@ class TradingEngine:
                         )
                     continue
 
-                # ---------- Entry execution (BUY, SELL_SHORT) ----------
                 atr = (df["high"] - df["low"]).rolling(14).mean().iloc[-1]
                 vol_stop_mult = self.config["risk_management"][
                     "volatility_stop_multiplier"
