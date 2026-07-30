@@ -63,7 +63,7 @@ class TradingEngine:
                 continue
 
             pm = PositionManager()
-            rm = RiskManager(capital, position_manager=pm)
+            rm = RiskManager(capital, position_manager=pm, broker_name=broker_name)
             self.risk_managers[broker_name] = rm
             self.position_managers[broker_name] = pm
 
@@ -604,7 +604,9 @@ class TradingEngine:
 
             rm.update_portfolio(capital - rm.current_capital, 0)
             if not rm.can_trade():
-                log.warning(f"Trading halted for {broker_name}")
+                log.warning(
+                    f"Trading halted for {broker_name}. Daily P&L: {rm.daily_pnl}, Capital: {rm.current_capital}, Peak: {rm.peak_capital}"
+                )
                 continue
 
             if broker_name == "ib":
@@ -771,9 +773,10 @@ class TradingEngine:
                     continue
 
                 atr = (df["high"] - df["low"]).rolling(14).mean().iloc[-1]
-                vol_stop_mult = self.config["risk_management"][
-                    "volatility_stop_multiplier"
-                ]
+                vol_stop_mult = rm.config.get(
+                    "volatility_stop_multiplier",
+                    self.config["risk_management"]["volatility_stop_multiplier"],
+                )
 
                 if action == "BUY":
                     stop_loss = last_price - (atr * vol_stop_mult)
@@ -794,15 +797,17 @@ class TradingEngine:
                 proposed_notional = quantity * last_price
                 current_gross = rm.get_gross_exposure(latest_prices)
                 new_gross = current_gross + proposed_notional
-                max_gross = capital * self.config["risk_management"].get(
-                    "max_gross_exposure", 1.5
+                max_gross = capital * rm.config.get(
+                    "max_gross_exposure",
+                    self.config["risk_management"]["max_gross_exposure"],
                 )
                 if new_gross > max_gross:
                     log.warning(f"Gross exposure limit for {symbol}")
                     continue
 
-                max_single = capital * self.config["risk_management"].get(
-                    "max_position_pct", 0.2
+                max_single = capital * rm.config.get(
+                    "max_position_pct",
+                    self.config["risk_management"]["max_position_pct"],
                 )
                 existing_notional = rm.get_position_notional(symbol, last_price)
                 new_single = existing_notional + proposed_notional
