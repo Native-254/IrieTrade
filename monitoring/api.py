@@ -82,13 +82,25 @@ async def api_signals(symbol: str = Query(..., description="Ticker symbol")):
     if not trading_engine:
         return {"error": "Engine not running"}
     now_utc = datetime.now(timezone.utc)
-    df = trading_engine.data_manager.get_data(
-        symbol,
-        start_date=(now_utc - timedelta(days=7)).strftime("%Y-%m-%d"),
-        end_date=now_utc.strftime("%Y-%m-%d"),
-        interval="15m",
-        force_refresh=True,
-    )
+
+    # Route crypto symbols to ccxt, stocks to Yahoo
+    if trading_engine._is_crypto(symbol):
+        df = pd.DataFrame()
+        for broker_name, broker in trading_engine.broker_manager.iterate_all():
+            if broker_name not in trading_engine.risk_managers:
+                continue
+            if symbol in trading_engine.symbols_by_broker.get(broker_name, []):
+                df = trading_engine._get_crypto_data(broker, symbol, limit=200)
+                break
+    else:
+        df = trading_engine.data_manager.get_data(
+            symbol,
+            start_date=(now_utc - timedelta(days=7)).strftime("%Y-%m-%d"),
+            end_date=now_utc.strftime("%Y-%m-%d"),
+            interval="15m",
+            force_refresh=True,
+        )
+
     if df.empty:
         return {"error": "No data"}
     signals = [

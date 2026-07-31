@@ -84,33 +84,46 @@ class TradingEngine:
         self.unrealized_pnl: float = 0.0
         self.realized_pnl: float = 0.0
 
-        # Load strategies once (shared)
+        # ──────────── Per‑broker strategy loading ────────────
+        strategies_by_broker = self.config["strategies"].get("strategies_by_broker", {})
         intraday_params = self.config["strategies"]["parameters"].get("intraday", {})
-        self.strategies = []
-        for strat_config in self.config["strategies"]["active"]:
-            if not strat_config.get("enabled", False):
-                continue
-            name = strat_config["name"]
-            params_key = name.lower().replace(" ", "_")
-            if name == "TrendFollowingLongOnly":
-                params_key = "trend_following_long_only"
-            params = intraday_params.get(
-                params_key, self.config["strategies"]["parameters"].get(params_key, {})
+        self.strategies_by_broker: dict[str, list] = {}
+
+        for broker_name in self.risk_managers:
+            strat_list = strategies_by_broker.get(
+                broker_name, self.config["strategies"]["active"]
             )
-            if name in ("TrendFollowing", "TrendFollowingLS"):
-                self.strategies.append(TrendFollowingLS(params))
-            elif name == "TrendFollowingLongOnly":
-                self.strategies.append(TrendFollowingLongOnly(params))
-            elif name == "MeanReversion":
-                self.strategies.append(MeanReversion(params))
-            elif name == "VWAPReversion":
-                self.strategies.append(VWAPReversion(params))
-            elif name == "OpeningRangeBreakout":
-                self.strategies.append(OpeningRangeBreakout(params))
-            elif name == "Breakout":
-                log.warning("Breakout strategy not implemented – skipping.")
-            else:
-                log.warning(f"Unknown strategy '{name}' – skipping.")
+            loaded = []
+            for strat_config in strat_list:
+                if not strat_config.get("enabled", False):
+                    continue
+                name = strat_config["name"]
+                params_key = name.lower().replace(" ", "_")
+                if name == "TrendFollowingLongOnly":
+                    params_key = "trend_following_long_only"
+                params = intraday_params.get(
+                    params_key, self.config["strategies"]["parameters"].get(params_key, {})
+                )
+                if name in ("TrendFollowing", "TrendFollowingLS"):
+                    loaded.append(TrendFollowingLS(params))
+                elif name == "TrendFollowingLongOnly":
+                    loaded.append(TrendFollowingLongOnly(params))
+                elif name == "MeanReversion":
+                    loaded.append(MeanReversion(params))
+                elif name == "VWAPReversion":
+                    loaded.append(VWAPReversion(params))
+                elif name == "OpeningRangeBreakout":
+                    loaded.append(OpeningRangeBreakout(params))
+                elif name == "Breakout":
+                    log.warning("Breakout strategy not implemented – skipping.")
+                else:
+                    log.warning(f"Unknown strategy '{name}' – skipping.")
+            self.strategies_by_broker[broker_name] = loaded
+
+        # Keep a default list for API endpoints etc.
+        self.strategies = self.strategies_by_broker.get(
+            next(iter(self.risk_managers.keys())) if self.risk_managers else "", []
+        )
 
         self.trailing_stop_percent = 0.02
         self.is_running = False
@@ -132,6 +145,7 @@ class TradingEngine:
         self.position_managers.clear()
         self.risk_managers.clear()
         self.broker_available.clear()
+        self.strategies_by_broker.clear()
         schedule.clear()
         self.is_running = False
         self.trade_results.clear()
@@ -584,7 +598,6 @@ class TradingEngine:
         all_latest_prices = {}
 
         for broker_name, broker in self.broker_manager.iterate_all():
-            # Skip brokers that were unavailable at startup
             if broker_name not in self.risk_managers:
                 log.info(f"Skipping '{broker_name}' – not available.")
                 continue
@@ -594,7 +607,6 @@ class TradingEngine:
             symbols = self.symbols_by_broker[broker_name]
             last_logged_qty = self.broker_last_logged_qty.setdefault(broker_name, {})
 
-            # Try to refresh account info; if it fails, skip this iteration for this broker
             try:
                 account = broker.get_account_info()
                 capital = account["net_liquidation"]
@@ -617,7 +629,6 @@ class TradingEngine:
 
             latest_prices = {}
 
-            # Trailing stops & price collection
             now_utc = datetime.now(timezone.utc)
             for sym, pos in pm.positions.items():
                 if self._is_crypto(sym):
@@ -666,9 +677,9 @@ class TradingEngine:
             self.broker_latest_prices[broker_name] = latest_prices
             rm.recalc_open_risk(latest_prices)
 
-            # ------------------------------------------------------------------
-            # Signal generation & trade entry / exit (position‑aware resolver)
-            # ------------------------------------------------------------------
+            # ──────────── Signal generation (per‑broker strategies) ────────────
+            broker_strategies = self.strategies_by_broker.get(broker_name, self.strategies)
+
             for symbol in symbols:
                 pos = pm.positions.get(symbol)
                 current_side = pos.side if pos else None
@@ -689,7 +700,7 @@ class TradingEngine:
                 latest_prices[symbol] = last_price
 
                 signals_to_resolve = []
-                for strategy in self.strategies:
+                for strategy in broker_strategies:
                     raw = strategy.generate_signals(df).iloc[-1]
                     if isinstance(raw, str):
                         try:
@@ -703,7 +714,6 @@ class TradingEngine:
                     if isinstance(s, Signal) and s != Signal.HOLD
                 }
 
-                # ---------- Resolver ----------
                 action = None
                 if current_side == "BUY":
                     if Signal.EXIT_LONG in signals_set:
@@ -785,7 +795,7 @@ class TradingEngine:
                 else:
                     continue
 
-                quantity = self.strategies[0].calculate_position_size(
+                quantity = broker_strategies[0].calculate_position_size(
                     capital=capital,
                     risk_per_trade=self.kelly_fraction(),
                     entry_price=last_price,
