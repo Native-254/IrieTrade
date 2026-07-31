@@ -804,25 +804,34 @@ class TradingEngine:
                 if quantity == 0:
                     continue
 
-                proposed_notional = quantity * last_price
-                current_gross = rm.get_gross_exposure(latest_prices)
-                new_gross = current_gross + proposed_notional
-                max_gross = capital * rm.config.get(
-                    "max_gross_exposure",
-                    self.config["risk_management"]["max_gross_exposure"],
-                )
-                if new_gross > max_gross:
-                    log.warning(f"Gross exposure limit for {symbol}")
-                    continue
-
+                # ── Auto‑scale quantity to respect limits ──
                 max_single = capital * rm.config.get(
                     "max_position_pct",
                     self.config["risk_management"]["max_position_pct"],
                 )
-                existing_notional = rm.get_position_notional(symbol, last_price)
-                new_single = existing_notional + proposed_notional
-                if new_single > max_single:
-                    log.warning(f"Single-name limit for {symbol}")
+                max_gross = capital * rm.config.get(
+                    "max_gross_exposure",
+                    self.config["risk_management"]["max_gross_exposure"],
+                )
+
+                current_gross = rm.get_gross_exposure(latest_prices)
+                gross_budget = max_gross - current_gross
+                single_budget = max_single - rm.get_position_notional(symbol, last_price)
+                notional_budget = min(gross_budget, single_budget)
+                notional_budget = max(0.0, notional_budget)
+
+                proposed_notional = quantity * last_price
+                if proposed_notional > notional_budget:
+                    scaled_qty = int(notional_budget / last_price) if last_price > 0 else 0
+                    if scaled_qty < quantity:
+                        log.info(
+                            f"Scaling {symbol} quantity {quantity} → {scaled_qty} to fit limits "
+                            f"(proposed={proposed_notional:.2f}, budget={notional_budget:.2f})"
+                        )
+                        quantity = scaled_qty
+
+                if quantity == 0:
+                    log.warning(f"{symbol} quantity scaled to 0 — skipping trade.")
                     continue
 
                 order_valid, msg = rm.validate_order(
@@ -929,8 +938,7 @@ class TradingEngine:
             )
             action = "SELL" if pos.side == "BUY" else "BUY_TO_COVER"
             self._log_trade(
-                sym, action, exit_qty, pos.entry_price, exit_price, pnl_dollar, pos.side
-            )
+                sym, action, exit_qty, pos.entry_price, exit_price, pnl_dollar, pos.side            )
             last_logged_qty[sym] = current_qty
         for sym, pos in pm.positions.items():
             last_logged_qty[sym] = pos.quantity
