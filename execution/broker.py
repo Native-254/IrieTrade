@@ -53,9 +53,15 @@ class Broker(ABC):
     def disconnect(self):
         """Optional: close any persistent connections."""
 
+    @property
+    def supports_shorting(self) -> bool:
+        """Return True if this broker can legally / structurally short sell.
+        Default is True; override for cash‑only accounts or crypto."""
+        return True
+
     def is_shortable(self, symbol: str, quantity: int) -> bool:
         """Default: all symbols are shortable (override for real checks)."""
-        return True
+        return self.supports_shorting
 
     def update_stop_order(self, order_id, new_stop_price) -> int | None:
         """Update an existing stop-loss order.  Returns new order ID or None."""

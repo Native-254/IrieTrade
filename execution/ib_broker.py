@@ -13,6 +13,7 @@ class IBBroker(Broker):
         self.ib = IB()
         self.config = CONFIG["exchanges"]["ib"]
         self.connected = False
+        self.is_margin = True  # assume margin until proven otherwise
 
     def connect(self):
         if self.connected:
@@ -26,9 +27,23 @@ class IBBroker(Broker):
             )
             self.connected = True
             log.success(f"Connected to IBKR. Account: {self.config['account_id']}")
+            # Detect account type
+            try:
+                summary = self.ib.accountSummary(self.config["account_id"])
+                for s in summary:
+                    if s.tag == "AccountType":
+                        self.is_margin = (s.value.upper() != "CASH")
+                        log.info("IB account type: %s → is_margin=%s", s.value, self.is_margin)
+                        break
+            except Exception as e:  # noqa: BLE001
+                log.warning("Could not determine IB account type: %s; assuming margin.", e)
         except Exception as e:
             log.error(f"Failed to connect to IBKR: {e}")
             raise
+
+    @property
+    def supports_shorting(self) -> bool:
+        return self.is_margin
 
     def get_account_info(self) -> dict[str, object]:
         if not self.connected:
@@ -198,6 +213,10 @@ class IBBroker(Broker):
         return positions
 
     def is_shortable(self, symbol: str, quantity: int) -> bool:
+        # First, check if account type allows shorting
+        if not self.supports_shorting:
+            log.info(f"Short sale of {symbol} blocked – cash account.")
+            return False
         try:
             contract = Stock(symbol, "SMART", "USD")
             self.ib.qualifyContracts(contract)
