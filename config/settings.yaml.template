@@ -1,19 +1,93 @@
 general:
   bot_name: "IrieTrade"
   log_level: "INFO"
-  timezone: "Africa/Nairobi"
+  timezone: "[your timezone]"
 
 trading:
-  platform: "ib"                     # ib, binance, okx, coinbase, kraken, kucoin
-  platforms:                         # used when running multiple platforms at once
+  platform: "ib"
+  platforms:
     - "ib"
-  symbols: ["AAPL", "MSFT", "GOOGL", "TSLA", "NVDA", "AMZN", "META", "JPM", "V", "MA", "PG", "DIS", "HD", "BAC", "VZ", "ADBE", "CMCSA", "NFLX", "INTC", "CSCO", "PFE", "MRK", "KO", "PEP", "WMT", "CVX", "XOM", "T", "UNH", "COST", "ORCL", "ABT", "CRM", "NKE", "MCD", "IBM", "LLY", "MDT", "BMY", "AMGN", "SBUX", "QCOM", "TXN", "GILD", "FISV", "INTU", "GE", "BA", "CAT", "MMM", "AXP", "SPGI", "DE", "DUK", "SO", "NEE", "EXC", "AEP", "ED", "D", "EIX", "PEG", "SRE", "WEC", "ES", "CMS"]
+    - "kucoin"
+  symbols: ["AAPL", "MSFT", "GOOGL"]
+  symbols_by_broker:
+    ib:
+      - "AAPL"      # sample symbols
+      - "MSFT"
+      - "GOOGL"
+      - "TSLA"
+      - "NVDA"
+      - "AMZN"
+      - "META"
+      - "JPM"
+      - "V"
+      - "MA"
+      - "PG"
+      - "DIS"
+      - "HD"
+      - "BAC"
+      - "VZ"
+      - "ADBE"
+      - "CMCSA"
+      - "NFLX"
+      - "INTC"
+      - "CSCO"
+      - "PFE"
+      - "MRK"
+      - "KO"
+      - "PEP"
+      - "WMT"
+      - "CVX"
+      - "XOM"
+      - "T"
+      - "UNH"
+      - "COST"
+      - "ORCL"
+      - "ABT"
+      - "CRM"
+      - "NKE"
+      - "MCD"
+      - "IBM"
+      - "LLY"
+      - "MDT"
+      - "BMY"
+      - "AMGN"
+      - "SBUX"
+      - "QCOM"
+      - "TXN"
+      - "GILD"
+      - "FISV"
+      - "INTU"
+      - "GE"
+      - "BA"
+      - "CAT"
+      - "MMM"
+      - "AXP"
+      - "SPGI"
+      - "DE"
+      - "DUK"
+      - "SO"
+      - "NEE"
+      - "EXC"
+      - "AEP"
+      - "ED"
+      - "D"
+      - "EIX"
+      - "PEG"
+      - "SRE"
+      - "WEC"
+      - "ES"
+      - "CMS"
+    kucoin:
+      - "ADA/USDT"
+      - "XRP/USDT"
+      - "DOGE/USDT"
+      - "LINK/USDT"
 
 exchanges:
   ib:
-    port: 4002                      # paper trading port
+    port: 4002
     client_id: 1
-    account_id: "DU12345678"
+    account_id: "DA12345678"
   binance:
     testnet: true
   okx:
@@ -23,7 +97,7 @@ exchanges:
   kraken:
     testnet: true
   kucoin:
-    testnet: true
+    testnet: false  # set to testnet to gauge bot performance
 
 data:
   sources:
@@ -42,6 +116,17 @@ risk_management:
   max_net_exposure: 0.5
   max_gross_exposure: 1.5
   max_position_pct: 0.20
+  per_symbol_multipliers:
+    QBTS: 4.0
+    OPTT: 4.5
+
+  risk_by_broker:
+    kucoin:                               # tighter risk management for small balances 
+      max_gross_exposure: 5.0
+      max_position_pct: 0.50
+      max_net_exposure: 1.0
+      max_drawdown: 0.99
+      daily_loss_limit: 0.50
 
 strategies:
   active:
@@ -54,12 +139,34 @@ strategies:
     - name: "MeanReversion"
       type: "technical"
       enabled: true
-    - name: "Breakout"
-      type: "technical"
-      enabled: false                  # not implemented yet
     - name: "TrendFollowingLS"
       type: "technical"
       enabled: true
+    - name: "OpeningRangeBreakout"
+      type: "technical"
+      enabled: true
+    - name: "VWAPReversion"
+      type: "technical"
+      enabled: true
+    - name: "Breakout"
+      type: "technical"
+      enabled: false
+
+  strategies_by_broker:
+    kucoin:
+      - name: "TrendFollowingLongOnly"
+        type: "technical"
+        enabled: true
+      - name: "MeanReversion"
+        type: "technical"
+        enabled: true
+      - name: "OpeningRangeBreakout"
+        type: "technical"
+        enabled: true
+      - name: "VWAPReversion"
+        type: "technical"
+        enabled: true
+
   parameters:
     trend_following:
       fast_ma: 50
@@ -79,6 +186,13 @@ strategies:
       rsi_period: 14
       rsi_oversold: 30
       rsi_overbought: 70
+    opening_range_breakout:
+      volume_ratio_threshold: 1.5
+    vwap_reversion:
+      std_mult: 2.0
+      rsi_period: 14
+      rsi_low: 30
+      rsi_high: 70
     breakout:
       period: 20
     trend_following_ls:
@@ -108,15 +222,15 @@ strategies:
         rsi_overbought: 70
 
 execution:
-  paper_trading: false               # false → bot sends real orders (paper account)
+  paper_trading: false
   simulate_slippage: true
   slippage_percent: 0.0005
   simulate_commissions: true
-  commission_per_share: 0.005
-  commission_min: 1.0
-  commission_max_pct: 0.01
-  short_availability_check: true
-  simulate_partial_fills: true
+  commission_per_share: 0.0
+  commission_min: 0.0
+  commission_max_pct: 0.0015
+  short_availability_check: false
+  simulate_partial_fills: false
   partial_fill_min_ratio: 0.8
   earnings_avoidance: true
   earnings_avoidance_days: 5
@@ -127,7 +241,7 @@ monitoring:
   telegram:
     enabled: true
     bot_token: ""
-    chat_id: ""
+    chat_id: ""  # add this in .env
   discord:
     enabled: true
     webhook_url: "https://discord.com/api/webhooks/..."
