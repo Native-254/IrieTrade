@@ -26,6 +26,7 @@ from strategies.signals import Signal
 from strategies.trend_following_long_only import TrendFollowingLongOnly
 from strategies.trend_following_ls import TrendFollowingLS
 from strategies.vwap_revisions import VWAPReversion
+from tools.scanner import MarketScanner
 from utils.config import CONFIG
 from utils.logger import log
 
@@ -124,6 +125,10 @@ class TradingEngine:
         self.strategies = self.strategies_by_broker.get(
             next(iter(self.risk_managers.keys())) if self.risk_managers else "", []
         )
+
+        # Scanner integration
+        self.scanner_enabled = self.config.get("scanner", {}).get("enabled", False)
+        self.scanner = MarketScanner() if self.scanner_enabled else None
 
         self.trailing_stop_percent = 0.02
         self.is_running = False
@@ -604,7 +609,7 @@ class TradingEngine:
 
             rm = self.risk_managers[broker_name]
             pm = self.position_managers[broker_name]
-            symbols = self.symbols_by_broker[broker_name]
+            symbols = list(set(self.symbols_by_broker[broker_name]) | set(pm.positions.keys()))
             last_logged_qty = self.broker_last_logged_qty.setdefault(broker_name, {})
 
             try:
@@ -646,6 +651,7 @@ class TradingEngine:
                 last_price = df["close"].iloc[-1]
                 latest_prices[sym] = last_price
 
+                # Update trailing stop
                 if pos.side == "BUY":
                     new_stop = max(
                         pos.stop_loss, last_price * (1 - self.trailing_stop_percent)
@@ -666,12 +672,34 @@ class TradingEngine:
                     else:
                         log.warning(f"No stop order ID for {sym} ({broker_name}).")
 
+                # Check stop-loss trigger
                 if (pos.side == "BUY" and last_price <= pos.stop_loss) or (
                     pos.side == "SELL" and last_price >= pos.stop_loss
                 ):
                     log.warning(
-                        f"Stop-loss triggered for {sym} ({broker_name}). Broker will close."
+                        f"Stop-loss triggered for {sym} ({broker_name}) at {last_price:.2f}. Attempting to close."
                     )
+                    # If we have no broker stop order, close immediately via market order
+                    if not pos.stop_order_id:
+                        success = self._place_trade(
+                            broker,
+                            pm,
+                            sym,
+                            "SELL" if pos.side == "BUY" else "BUY_TO_COVER",
+                            pos.quantity,
+                            last_price,
+                            stop_loss=0.0,
+                            atr=0.0,
+                            vol_stop_mult=0.0,
+                        )
+                        if success:
+                            log.success(f"Stop-loss closure executed for {sym}.")
+                        else:
+                            log.error(f"Failed to close {sym} on stop-loss.")
+                    else:
+                        log.warning(
+                            f"Broker stop order {pos.stop_order_id} exists for {sym}; skipping manual close."
+                        )
 
             self._reconcile_and_log_closed_positions(pm, last_logged_qty, latest_prices)
             self.broker_latest_prices[broker_name] = latest_prices
@@ -896,6 +924,8 @@ class TradingEngine:
                         pm.close_position(sym)
                     continue
                 side = "BUY" if qty > 0 else "SELL"
+                # Safe initial stop: for shorts use inf, for longs use 0.0
+                init_stop = float('inf') if side == "SELL" else 0.0
                 if sym not in pm.positions:
                     pm.open_position(
                         Position(
@@ -903,13 +933,16 @@ class TradingEngine:
                             side=side,
                             quantity=abs(qty),
                             entry_price=avg_cost,
-                            stop_loss=0.0,
+                            stop_loss=init_stop,
                         )
                     )
                 else:
                     pos = pm.positions[sym]
                     pos.quantity = abs(qty)
                     pos.entry_price = avg_cost
+                    # If existing stop is missing or stuck at the old default, re-init
+                    if pos.stop_loss is None or (pos.side == "SELL" and pos.stop_loss == 0.0):
+                        pos.stop_loss = float('inf') if pos.side == "SELL" else 0.0
         except Exception as e:  # noqa: BLE001
             log.error(f"Position sync failed: {e}")
 
@@ -952,6 +985,12 @@ class TradingEngine:
         schedule.every().hour.at(":01").do(self.run_iteration)
         schedule.every().day.at("00:01").do(self._reset_daily_pnl)
 
+        # Scanner scheduling – separate jobs for stocks and crypto
+        if self.scanner_enabled and self.scanner:
+            scan_time = self.config["scanner"].get("time", "08:00")
+            schedule.every().day.at(scan_time).do(self._run_stock_scanner)
+            schedule.every().day.at(scan_time).do(self._run_crypto_scanner)
+
         api_port = self.config["monitoring"]["health_check_port"]
         set_trading_engine(self)
         api_thread = threading.Thread(
@@ -972,6 +1011,34 @@ class TradingEngine:
     def _reset_daily_pnl(self):
         for rm in self.risk_managers.values():
             rm.reset_daily_pnl()
+
+    # ------------------------------------------------------------------
+    # Scanners
+    # ------------------------------------------------------------------
+    def _run_stock_scanner(self):
+        """Update IBKR symbols with fresh stock candidates."""
+        if self.scanner is None:
+            return
+        log.info("Running stock scanner...")
+        new_symbols = self.scanner.scan_stocks()
+        if new_symbols:
+            self.symbols_by_broker["ib"] = new_symbols
+            self.config["trading"]["symbols"] = new_symbols
+            log.success(f"IBKR symbols updated: {', '.join(new_symbols[:10])}...")
+        else:
+            log.warning("Stock scanner returned no symbols; IBKR watchlist unchanged.")
+
+    def _run_crypto_scanner(self):
+        """Update KuCoin symbols with fresh crypto candidates."""
+        if self.scanner is None:
+            return
+        log.info("Running crypto scanner for KuCoin...")
+        new_pairs = self.scanner.scan_crypto(exchange_name="kucoin")
+        if new_pairs:
+            self.symbols_by_broker["kucoin"] = new_pairs
+            log.success(f"KuCoin symbols updated: {', '.join(new_pairs[:10])}...")
+        else:
+            log.warning("Crypto scanner returned no symbols; KuCoin watchlist unchanged.")
 
 
 if __name__ == "__main__":

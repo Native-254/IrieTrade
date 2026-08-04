@@ -70,21 +70,30 @@ class IBBroker(Broker):
         limit_price: float | None = None,
         stop_price: float | None = None,
     ) -> dict[str, object]:
+        """Place an order, translating internal action names to IBKR sides."""
         if not self.connected:
             self.connect()
+
+        # Map IrieTrade's internal actions to IBKR sides
+        ib_side = side.upper()
+        if ib_side == "BUY_TO_COVER":
+            ib_side = "BUY"
+        elif ib_side == "SELL_SHORT":
+            ib_side = "SELL"
+
         contract = Stock(symbol, "SMART", "USD")
         self.ib.qualifyContracts(contract)
         if order_type.upper() == "MKT":
-            order = MarketOrder(side.upper(), quantity)
+            order = MarketOrder(ib_side, quantity)
         elif order_type.upper() == "LMT":
             if limit_price is None:
                 raise ValueError("Limit price required for LMT order")
-            order = LimitOrder(side.upper(), quantity, limit_price)
+            order = LimitOrder(ib_side, quantity, limit_price)
         else:
             raise ValueError(f"Unsupported order type: {order_type}")
         trade = self.ib.placeOrder(contract, order)
         log.info(
-            f"Order placed: {side} {quantity} {symbol} @ {order_type}. ID: {trade.order.orderId}"
+            f"Order placed: {side} ({ib_side}) {quantity} {symbol} @ {order_type}. ID: {trade.order.orderId}"
         )
         self.ib.sleep(1)
         return {
@@ -213,7 +222,6 @@ class IBBroker(Broker):
         return positions
 
     def is_shortable(self, symbol: str, quantity: int) -> bool:
-        # First, check if account type allows shorting
         if not self.supports_shorting:
             log.info(f"Short sale of {symbol} blocked – cash account.")
             return False

@@ -2,7 +2,7 @@
 
 ![IrieTrade](https://github.com/user-attachments/assets/8190264a-85b9-47dd-a0d5-f8f92d7347b9)
 
-A fully automated, risk-managed trading bot for the NYSE (via Interactive Brokers) and multiple crypto exchanges, with paper-trading support, real-time alerts, a modular strategy engine, and an interactive dashboard. Built from scratch in Python.
+A fully automated, risk‑managed trading bot for the **NYSE** (via Interactive Brokers) and multiple crypto exchanges, with paper‑trading support, real‑time alerts, a modular strategy engine, and an interactive dashboard. Built from scratch in Python.
 
 ![Bot Status](https://img.shields.io/badge/status-paper_trading-brightgreen)
 ![License](https://img.shields.io/badge/license-MIT-blue)
@@ -19,7 +19,7 @@ A fully automated, risk-managed trading bot for the NYSE (via Interactive Broker
 - **Position-aware signal resolver** – merges signals from all active strategies and resolves conflicts based on your current position, preventing accidental naked short selling and handling reversals safely.
 - **Long/Short capability** – enters both long and short positions with hard bracket stops (IBKR) or market orders (crypto). Short selling is automatically disabled on cash accounts and on crypto exchanges that don't support it.
 - **Multi-platform trading** – supports Interactive Brokers (IBKR), Binance, OKX, Coinbase, Kraken, KuCoin, and a ready-to-use stub for the Nairobi Securities Exchange (NSE).
-- **Full risk management** – ATR-based stops, Kelly-dynamic position sizing, max portfolio heat, gross/net exposure limits, daily loss limits, drawdown protection, single-name limits, and an earnings blackout filter. Risk limits can be configured per broker (e.g., looser limits for a small crypto account, tight limits for a large equity account).
+- **Full risk management** – ATR‑based stops, Kelly‑dynamic position sizing, max portfolio heat, gross/net exposure limits, daily loss limits, drawdown protection, single‑name limits, and an earnings blackout filter. Risk limits can be configured **per broker** (e.g., looser limits for a small crypto account, tight limits for a large equity account).
 - **Trailing stops & partial exits** – automatically tightens stop orders and scales out of positions on exit signals.
 - **Hybrid data pipeline** – Yahoo Finance for US stocks; ccxt (direct exchange API) for crypto pairs, both with local Parquet caching.
 - **Real-time dashboard** – FastAPI dashboard showing NAV, daily P&L, unrealised P&L, equity curve, open positions, and trade history.
@@ -53,8 +53,8 @@ trading_bot/
 │   ├── orb.py                 # Opening Range Breakout
 │   └── vwap_revisions.py      # VWAP mean reversion
 ├── backtest/
-│   ├── engine.py              # Loop-based backtester (uses live resolver)
-│   └── backtest_multi.py      # Multi-symbol backtest runner
+│   ├── engine.py              # Loop‑based backtester (uses live resolver)
+│   └── backtest_multi.py      # Multi‑symbol backtest runner
 ├── execution/
 │   ├── broker.py              # Abstract broker interface
 │   ├── ib_broker.py           # Interactive Brokers (bracket orders, margin detection)
@@ -70,15 +70,17 @@ trading_bot/
 │   ├── web3_dex_broker.py
 │   └── broker_manager.py      # Dynamically loads enabled brokers
 ├── risk/
-│   ├── manager.py             # Risk rules & exposure calculation (per-broker profiles)
-│   └── position_manager.py    # Per-broker position tracking
+│   ├── manager.py             # Risk rules & exposure calculation (per‑broker profiles)
+│   └── position_manager.py    # Per‑broker position tracking
 ├── monitoring/
 │   ├── api.py                 # FastAPI dashboard & REST API
 │   ├── discord_alerter.py
 │   ├── telegram_alerter.py
 │   └── email_alerter.py       # Brevo + SMTP
 ├── live/
-│   └── engine.py              # Main orchestrator – multi-broker loop
+│   └── engine.py              # Main orchestrator – multi‑broker loop
+├── tools/
+│   └── scanner.py             # Automated market scanner (stocks & crypto)
 ├── utils/
 │   ├── config.py              # YAML loader with env var override
 │   ├── logger.py              # Loguru configuration
@@ -215,6 +217,7 @@ These are enabled by default in paper mode. Disable them when you switch to a li
 
 - Discord – Rich embeds with trade details (symbol, action, quantity, price) and error alerts. Set up via webhook URL in `.env`.
 - Telegram – Plain text alerts. Requires a bot token and chat ID (obtain via @BotFather).
+(Note: you may need to manually obtain your chat ID from `https://api.telegram.org/bot<TOKEN>/getUpdates` – a 403 error indicates an incorrect chat ID.)
 - Email – Trade alerts and critical error messages sent via Brevo API (primary) or Gmail SMTP (fallback).
 
 Add the following to your `.env`:

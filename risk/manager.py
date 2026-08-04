@@ -70,7 +70,7 @@ class RiskManager:
             return
         total_risk = 0.0
         for pos in self.position_manager.positions.values():
-            if pos.stop_loss and pos.symbol in latest_prices:
+            if pos.stop_loss is not None and pos.symbol in latest_prices:
                 price = latest_prices[pos.symbol]
                 total_risk += pos.quantity * abs(price - pos.stop_loss)
         self.open_risk = total_risk
