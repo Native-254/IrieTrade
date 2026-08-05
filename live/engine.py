@@ -460,11 +460,8 @@ class TradingEngine:
                         quantity=filled_qty,
                         order_type="MKT",
                     )
-                    if not order_result or order_result["status"] not in (
-                        "Filled",
-                        "closed",
-                    ):
-                        log.error(f"Plain order failed for {symbol}")
+                    if not order_result or not order_result.get("order_id"):
+                        log.error(f"Plain order failed for {symbol}: no order ID")
                         self.email.send_error_alert(
                             f"Trade failed for {symbol}: plain order rejected"
                         )
