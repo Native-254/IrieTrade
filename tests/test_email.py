@@ -2,6 +2,7 @@
 import types
 
 import live.engine as engine_module
+import monitoring.email_alerter as email_module
 from monitoring.email_alerter import EmailAlerter
 
 
@@ -122,3 +123,29 @@ def test_place_trade_sends_error_email_on_no_position(monkeypatch):
     assert success is False
     # The error alert should contain the "no internal position" message
     assert any("no internal position" in msg[0] for msg in email_stub.error_calls)
+
+
+def test_trade_alert_embeds_inline_logo(monkeypatch):
+    monkeypatch.setenv("EMAIL_SENDER", "sender@example.com")
+    monkeypatch.setenv("EMAIL_BREVO_API_KEY", "test-key")
+    monkeypatch.setenv("EMAIL_RECIPIENT", "recipient@example.com")
+
+    captured = {}
+
+    class DummyResponse:
+        status_code = 201
+        text = ""
+
+    def fake_post(url, json, headers, timeout):
+        captured["payload"] = json
+        return DummyResponse()
+
+    monkeypatch.setattr(email_module.requests, "post", fake_post)
+
+    alerter = EmailAlerter()
+    alerter.send_trade_alert("AAPL", "BUY", 10, 100.0)
+
+    html = captured["payload"]["htmlContent"]
+    assert "cid:irietrade-logo" in html
+    assert "IrieTrade Logo" in html
+    assert captured["payload"]["attachment"][0]["cid"] == "irietrade-logo"
