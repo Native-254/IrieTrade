@@ -269,9 +269,14 @@ class TradingEngine:
         return max(1, filled)
 
     def _check_shortable(self, broker, symbol: str, quantity: int) -> bool:
+        # Always respect the broker's own capability first
+        if not broker.is_shortable(symbol, quantity):
+            return False
+        # If the config says to skip the availability check, we're done
         if not self.config["execution"].get("short_availability_check", False):
             return True
-        return broker.is_shortable(symbol, quantity)
+        # Optional: further IBKR share-availability logic here
+        return True
 
     def _earnings_nearby(self, symbol: str) -> bool:
         if self._is_crypto(symbol):
