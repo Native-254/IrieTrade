@@ -1,0 +1,9 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="400" viewBox="0 0 1200 400">
+  <rect width="1200" height="400" rx="40" fill="#0b111a"/>
+  <circle cx="220" cy="200" r="120" fill="#00cec9"/>
+  <circle cx="220" cy="200" r="70" fill="#0b111a"/>
+  <rect x="360" y="110" width="460" height="80" rx="20" fill="#ffffff"/>
+  <rect x="360" y="220" width="320" height="60" rx="20" fill="#00cec9"/>
+  <text x="395" y="168" font-family="Segoe UI, Arial, sans-serif" font-size="52" font-weight="700" fill="#0b111a">IrieTrade</text>
+  <text x="395" y="262" font-family="Segoe UI, Arial, sans-serif" font-size="28" font-weight="600" fill="#0b111a">Trading Alerts</text>
+</svg>

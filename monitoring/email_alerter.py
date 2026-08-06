@@ -1,6 +1,7 @@
 # monitoring/email_alerter.py
 import base64
 import os
+from pathlib import Path
 
 import requests
 
@@ -61,14 +62,21 @@ class EmailAlerter:
         except Exception as exc:  # noqa: BLE001
             log.warning(f"Unable to fetch email logo from {self.logo_url}: {exc}")
 
-        fallback_svg = (
-            "PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHdpZHRoPSIxNTAi"
-            "IGhlaWdodD0iNTAiPjx0ZXh0IHg9IjEwIiB5PSI0MCI+SXJpZVRyYWRlPC90ZXh0Pjwvc3ZnPg=="
-        )
+        fallback_path = Path(__file__).resolve().parent.parent / "logo.png"
+        if fallback_path.exists():
+            fallback_content = fallback_path.read_bytes()
+            encoded = base64.b64encode(fallback_content).decode("ascii")
+            return {
+                "name": fallback_path.name,
+                "content": encoded,
+                "contentType": "image/png",
+                "cid": "irietrade-logo",
+            }
+
         return {
-            "name": "irietrade-logo.svg",
-            "content": fallback_svg,
-            "contentType": "image/svg+xml",
+            "name": "irietrade-logo.png",
+            "content": "",
+            "contentType": "image/png",
             "cid": "irietrade-logo",
         }
 
