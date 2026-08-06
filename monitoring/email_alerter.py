@@ -1,7 +1,5 @@
 # monitoring/email_alerter.py
-import base64
 import os
-from pathlib import Path
 
 import requests
 
@@ -14,9 +12,8 @@ class EmailAlerter:
         self.api_key = os.getenv("EMAIL_BREVO_API_KEY")
         self.recipient = os.getenv("EMAIL_RECIPIENT")
         self.logo_url = os.getenv(
-            "EMAIL_LOGO_URL", "http://irietrade.me/logo.png"
+            "EMAIL_LOGO_URL", "https://irietrade.me/logo.png"
         )
-        self.logo_attachment = self._build_logo_attachment()
         self.enabled = all([self.sender, self.api_key, self.recipient])
         if self.enabled:
             log.info("Email alerter initialized (Brevo API).")
@@ -34,8 +31,6 @@ class EmailAlerter:
             "subject": subject,
             "htmlContent": body_html,
         }
-        if self.logo_attachment:
-            payload["attachment"] = [self.logo_attachment]
 
         try:
             resp = requests.post(url, json=payload, headers=headers, timeout=10)
@@ -45,40 +40,6 @@ class EmailAlerter:
                 log.error(f"Brevo failed: {resp.status_code} {resp.text}")
         except Exception as e:  # noqa: BLE001
             log.error(f"Failed to send email via Brevo: {e}")
-
-    def _build_logo_attachment(self) -> dict | None:
-        """Return a Brevo-compatible inline attachment for the email logo."""
-        try:
-            response = requests.get(self.logo_url, timeout=10)
-            if response.ok:
-                mime_type = response.headers.get("content-type", "image/png")
-                encoded = base64.b64encode(response.content).decode("ascii")
-                return {
-                    "name": "irietrade-logo",
-                    "content": encoded,
-                    "contentType": mime_type,
-                    "cid": "irietrade-logo",
-                }
-        except Exception as exc:  # noqa: BLE001
-            log.warning(f"Unable to fetch email logo from {self.logo_url}: {exc}")
-
-        fallback_path = Path(__file__).resolve().parent.parent / "logo.png"
-        if fallback_path.exists():
-            fallback_content = fallback_path.read_bytes()
-            encoded = base64.b64encode(fallback_content).decode("ascii")
-            return {
-                "name": fallback_path.name,
-                "content": encoded,
-                "contentType": "image/png",
-                "cid": "irietrade-logo",
-            }
-
-        return {
-            "name": "irietrade-logo.png",
-            "content": "",
-            "contentType": "image/png",
-            "cid": "irietrade-logo",
-        }
 
     def _build_signature(self) -> str:
         """Return the standard email footer."""
@@ -98,7 +59,7 @@ class EmailAlerter:
         <html>
         <body style="font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; background-color: #0b111a; color: #dfe6e9; padding: 20px;">
             <div style="text-align: center; margin-bottom: 20px;">
-                <img src="cid:irietrade-logo" alt="IrieTrade Logo" style="max-width: 200px; height: auto;">
+                <img src="{self.logo_url}" alt="IrieTrade Logo" style="max-width: 200px; height: auto;">
             </div>
             <h2 style="color: {action_color};">Trade Executed</h2>
             <table style="width: 100%; border-collapse: collapse; margin: 20px 0;">
@@ -131,7 +92,7 @@ class EmailAlerter:
         <html>
         <body style="font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; background-color: #0b111a; color: #dfe6e9; padding: 20px;">
             <div style="text-align: center; margin-bottom: 20px;">
-                <img src="cid:irietrade-logo" alt="IrieTrade Logo" style="max-width: 200px; height: auto;">
+                <img src="{self.logo_url}" alt="IrieTrade Logo" style="max-width: 200px; height: auto;">
             </div>
             <h2 style="color: #e17055;">⚠️ An Error Occurred</h2>
             <p style="background-color: #1e1e2f; padding: 15px; border-left: 4px solid #e17055; margin: 20px 0; font-family: monospace;">

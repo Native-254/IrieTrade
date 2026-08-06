@@ -146,6 +146,6 @@ def test_trade_alert_embeds_inline_logo(monkeypatch):
     alerter.send_trade_alert("AAPL", "BUY", 10, 100.0)
 
     html = captured["payload"]["htmlContent"]
-    assert "cid:irietrade-logo" in html
+    assert alerter.logo_url in html
     assert "IrieTrade Logo" in html
-    assert captured["payload"]["attachment"][0]["cid"] == "irietrade-logo"
+    assert "attachment" not in captured["payload"]
