@@ -336,8 +336,7 @@ class BacktestEngine:
                         if budget <= 0:
                             continue
                         scaled_qty = int(budget / last_price)
-                        if scaled_qty < base_qty:
-                            base_qty = scaled_qty
+                        base_qty = min(base_qty, scaled_qty)
 
                     existing_notional = pos.quantity * last_price if pos else 0.0
                     new_single = existing_notional + base_qty * last_price
@@ -346,8 +345,7 @@ class BacktestEngine:
                         if budget <= 0:
                             continue
                         scaled_qty = int(budget / last_price)
-                        if scaled_qty < base_qty:
-                            base_qty = scaled_qty
+                        base_qty = min(base_qty, scaled_qty)
 
                     if base_qty <= 0:
                         continue

@@ -1,6 +1,5 @@
 # backtest/backtest_multi.py
 """Run the backtest engine over all symbols in the configuration."""
-
 from backtest.engine import BacktestEngine
 from data.manager import DataManager
 from utils.config import CONFIG
@@ -9,46 +8,42 @@ from utils.logger import log
 
 def main():
     symbols = CONFIG["trading"]["symbols"]
-    start_date = "2015-01-01"
-    end_date = "2025-12-31"
+    start_date = "2020-01-01"
+    end_date = "2024-01-01"
 
     data_mgr = DataManager()
     engine = BacktestEngine()
 
-    results = []
+    # Fetch all historical data into a dict keyed by symbol
+    data = {}
     for symbol in symbols:
-        log.info(f"Backtesting {symbol} …")
-        df = data_mgr.get_data(
-            symbol,
-            start_date=start_date,
-            end_date=end_date,
-            interval="1d",
-            force_refresh=False,
-        )
+        log.info(f"Fetching data for {symbol} …")
+        df = data_mgr.get_data(symbol, start_date=start_date, end_date=end_date,
+                               interval="1d", force_refresh=False)
         if df.empty:
             log.warning(f"No data for {symbol}, skipping.")
             continue
+        data[symbol] = df
 
-        result = engine.run(symbol, df, start_date=start_date, end_date=end_date)
-        if "error" in result:
-            log.error(f"Backtest failed for {symbol}: {result['error']}")
-            continue
+    if not data:
+        log.error("No data for any symbol. Exiting.")
+        return
 
-        final_return = (
-            (result["final_capital"] - engine.initial_capital)
-            / engine.initial_capital
-            * 100
-        )
-        trades = result["total_trades"]
-        log.success(f"{symbol}: {trades} trades, final return {final_return:+.2f}%")
-        results.append((symbol, trades, final_return))
+    result = engine.run(symbols=list(data.keys()), data=data,
+                        start_date=start_date, end_date=end_date)
+    if "error" in result:
+        log.error(f"Backtest failed: {result['error']}")
+        return
 
-    # Summary
     print("\nBacktest Summary")
-    print("=" * 50)
-    for sym, tr, ret in sorted(results, key=lambda x: x[2], reverse=True):
-        print(f"{sym:<8}  {tr:4d} trades  {ret:+8.2f}%")
-    print("=" * 50)
+    print("=" * 60)
+    print(f"Final capital:   ${result['final_capital']:,.2f}")
+    print(f"Total return:    {result['total_return'] * 100:+.2f}%")
+    print(f"Sharpe ratio:    {result['sharpe_ratio']:.3f}")
+    print(f"Max drawdown:    {result['max_drawdown'] * 100:.2f}%")
+    print(f"Win rate:        {result['win_rate'] * 100:.1f}%")
+    print(f"Total trades:    {result['total_trades']}")
+    print("=" * 60)
 
 
 if __name__ == "__main__":

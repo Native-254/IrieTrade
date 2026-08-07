@@ -1,5 +1,6 @@
 # strategies/base.py
 from abc import ABC, abstractmethod
+from typing import Any
 
 import pandas as pd
 
@@ -7,9 +8,9 @@ import pandas as pd
 class BaseStrategy(ABC):
     """Abstract base class for all trading strategies."""
 
-    def __init__(self, parameters: dict):
+    def __init__(self, parameters: dict[str, Any] | None = None) -> None:
         self.name = self.__class__.__name__
-        self.parameters = parameters
+        self.parameters = parameters or {}
         self.positions = {}  # Tracks current positions {symbol: size}
 
     @abstractmethod
