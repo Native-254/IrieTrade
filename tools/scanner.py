@@ -1,4 +1,6 @@
 # tools/scanner.py
+"""Market scanner that identifies new trading candidates for stocks and crypto."""
+
 from __future__ import annotations
 
 import pandas as pd
@@ -23,15 +25,20 @@ class MarketScanner:
     def _load_stock_universe(self) -> list[str]:
         """Return the stock universe to scan. If no custom list, fetch S&P 500."""
         if self.universe:
+            # If the universe contains "SP500", replace it with the actual S&P 500 list
+            if "SP500" in self.universe:
+                try:
+                    table = pd.read_html("https://en.wikipedia.org/wiki/List_of_S%26P_500_companies")[0]
+                    tickers = table["Symbol"].tolist()
+                    log.info(f"Loaded {len(tickers)} stocks from S&P 500 list.")
+                    return tickers
+                except Exception as e:  # noqa: BLE001
+                    log.warning(f"Could not fetch S&P 500 list: {e}. Falling back to IB symbol list.")
+                    return CONFIG["trading"]["symbols"]
+            # Otherwise, use the provided list as-is
             return self.universe
-        try:
-            table = pd.read_html("https://en.wikipedia.org/wiki/List_of_S%26P_500_companies")[0]
-            tickers = table["Symbol"].tolist()
-            log.info(f"Loaded {len(tickers)} stocks from S&P 500 list.")
-            return tickers
-        except Exception as e:  # noqa: BLE001
-            log.warning(f"Could not fetch S&P 500 list: {e}. Falling back to IB symbol list.")
-            return CONFIG["trading"]["symbols"]
+        # Fallback: no universe configured – use IB symbol list from config
+        return CONFIG["trading"]["symbols"]
 
     def fetch_historical_data(self, symbol: str, period: str = "3mo") -> pd.DataFrame | None:
         """Download historical data for a symbol."""
