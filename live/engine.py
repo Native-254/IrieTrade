@@ -637,7 +637,7 @@ class TradingEngine:
             latest_prices = {}
 
             now_utc = datetime.now(timezone.utc)
-            for sym, pos in pm.positions.items():
+            for sym, pos in list(pm.positions.items()):  # ← FIX: iterate over snapshot
                 if self._is_crypto(sym):
                     df = self._get_crypto_data(broker, sym, limit=200)
                 else:
