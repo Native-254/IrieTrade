@@ -159,7 +159,9 @@ class TradingEngine:
         # First-run welcome flag
         self.first_run = not Path("data/.welcome_shown").exists()
         if self.first_run:
+            Path("data").mkdir(parents=True, exist_ok=True)
             Path("data/.welcome_shown").touch()
+            log.info("First‑run welcome flag set – dashboard will show toast.")
 
         log.success("Trading Engine initialized.")
 
