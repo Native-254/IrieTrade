@@ -20,13 +20,21 @@ from monitoring.email_alerter import EmailAlerter
 from monitoring.telegram_alerter import TelegramAlerter
 from risk.manager import RiskManager
 from risk.position_manager import Position, PositionManager
+from strategies.adx_filter import ADXTrendFilter
+from strategies.aroon import AroonCross
+from strategies.fibonacci import FibonacciRetracement
+from strategies.ichimoku import IchimokuCloud
+from strategies.macd_cross import MACDCross
 from strategies.mean_revisions import MeanReversion
+from strategies.obv_divergence import OBVDivergence
 from strategies.orb import OpeningRangeBreakout
 from strategies.signals import Signal
+from strategies.stochastic import StochasticCross
 from strategies.trend_following_long_only import TrendFollowingLongOnly
 from strategies.trend_following_ls import TrendFollowingLS
 from strategies.vwap_revisions import VWAPReversion
 from tools.scanner import MarketScanner
+from tools.sentiment_scanner import TrendingScanner
 from utils.config import CONFIG
 from utils.logger import log
 
@@ -115,6 +123,20 @@ class TradingEngine:
                     loaded.append(VWAPReversion(params))
                 elif name == "OpeningRangeBreakout":
                     loaded.append(OpeningRangeBreakout(params))
+                elif name == "MACDCross":
+                    loaded.append(MACDCross(params))
+                elif name == "ADXTrendFilter":
+                    loaded.append(ADXTrendFilter(params))
+                elif name == "OBVDivergence":
+                    loaded.append(OBVDivergence(params))
+                elif name == "AroonCross":
+                    loaded.append(AroonCross(params))
+                elif name == "StochasticCross":
+                    loaded.append(StochasticCross(params))
+                elif name == "FibonacciRetracement":
+                    loaded.append(FibonacciRetracement(params))
+                elif name == "IchimokuCloud":
+                    loaded.append(IchimokuCloud(params))
                 elif name == "Breakout":
                     log.warning("Breakout strategy not implemented – skipping.")
                 else:
@@ -992,6 +1014,7 @@ class TradingEngine:
             scan_time = self.config["scanner"].get("time", "08:00")
             schedule.every().day.at(scan_time).do(self._run_stock_scanner)
             schedule.every().day.at(scan_time).do(self._run_crypto_scanner)
+            schedule.every().day.at(scan_time).do(self._run_trending_scanner)
 
         api_port = self.config["monitoring"]["health_check_port"]
         set_trading_engine(self)
@@ -1041,6 +1064,20 @@ class TradingEngine:
             log.success(f"KuCoin symbols updated: {', '.join(new_pairs[:10])}...")
         else:
             log.warning("Crypto scanner returned no symbols; KuCoin watchlist unchanged.")
+
+    def _run_trending_scanner(self):
+        """Update KuCoin symbols with CoinGecko trending coins."""
+        log.info("Running trending scanner...")
+        trending_pairs = TrendingScanner.trending_usdt_pairs()
+        if trending_pairs:
+            current = set(self.symbols_by_broker.get("kucoin", []))
+            merged = list(current | set(trending_pairs))[:20]
+            self.symbols_by_broker["kucoin"] = merged
+            log.success(
+                f"KuCoin symbols updated with trending coins: {', '.join(trending_pairs[:5])}..."
+            )
+        else:
+            log.warning("Trending scanner returned no symbols.")
 
 
 if __name__ == "__main__":
