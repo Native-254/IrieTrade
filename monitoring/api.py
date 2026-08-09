@@ -113,6 +113,13 @@ async def api_signals(symbol: str = Query(..., description="Ticker symbol")):
     }
 
 
+@app.get("/api/first-run")
+async def api_first_run():
+    if trading_engine:
+        return {"first_run": trading_engine.first_run}
+    return {"first_run": False}
+
+
 @app.get("/api/positions")
 async def api_positions():
     if not trading_engine:
@@ -462,6 +469,24 @@ async def dashboard():
                 </div>
             </main>
         </div>
+    <script>
+        fetch('/api/first-run')
+            .then(r => r.json())
+            .then(data => {{
+                if (data.first_run) {{
+                    const toast = document.createElement('div');
+                    toast.style.cssText = 'position:fixed;bottom:20px;right:20px;background:linear-gradient(135deg,#2d3436,#636e72);color:#fff;padding:20px 28px;border-radius:16px;box-shadow:0 8px 32px rgba(0,0,0,0.3);z-index:9999;font-size:14px;max-width:340px;';
+                    toast.innerHTML = `
+                        <strong>👋 Welcome to IrieTrade!</strong><br><br>
+                        ⭐ <a href="https://github.com/Native-254/IrieTrade" target="_blank" style="color:#fdcb6e;">Star the repo</a><br>
+                        💬 <a href="https://github.com/Native-254/IrieTrade/discussions" target="_blank" style="color:#74b9ff;">Join Discussions</a><br>
+                        ✉️ <a href="mailto:info.native@gmail.com" style="color:#ff7675;">Send a suggestion</a><br><br>
+                        <button onclick="this.parentElement.remove()" style="background:#dfe6e9;color:#2d3436;border:none;padding:6px 14px;border-radius:8px;cursor:pointer;">Got it ✌️</button>
+                    `;
+                    document.body.appendChild(toast);
+                }}
+            }});
+    </script>
     </body>
     </html>
     """)

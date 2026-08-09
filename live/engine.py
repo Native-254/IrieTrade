@@ -4,6 +4,7 @@ import os
 import threading
 import time
 from datetime import datetime, timedelta, timezone
+from pathlib import Path
 
 import numpy as np
 import pandas as pd
@@ -154,6 +155,12 @@ class TradingEngine:
 
         self.trailing_stop_percent = 0.02
         self.is_running = False
+
+        # First-run welcome flag
+        self.first_run = not Path("data/.welcome_shown").exists()
+        if self.first_run:
+            Path("data/.welcome_shown").touch()
+
         log.success("Trading Engine initialized.")
 
     # ------------------------------------------------------------------
@@ -1014,6 +1021,7 @@ class TradingEngine:
             scan_time = self.config["scanner"].get("time", "08:00")
             schedule.every().day.at(scan_time).do(self._run_stock_scanner)
             schedule.every().day.at(scan_time).do(self._run_crypto_scanner)
+            schedule.every().day.at(scan_time).do(self._run_clone_monitor)
             schedule.every().day.at(scan_time).do(self._run_trending_scanner)
 
         api_port = self.config["monitoring"]["health_check_port"]
@@ -1064,6 +1072,15 @@ class TradingEngine:
             log.success(f"KuCoin symbols updated: {', '.join(new_pairs[:10])}...")
         else:
             log.warning("Crypto scanner returned no symbols; KuCoin watchlist unchanged.")
+
+    def _run_clone_monitor(self):
+        """Run the repo clone monitor script."""
+        try:
+            from tools.clone_monitor import main
+
+            main()
+        except Exception as e:  # noqa: BLE001
+            log.warning(f"Clone monitor failed: {e}")
 
     def _run_trending_scanner(self):
         """Update KuCoin symbols with CoinGecko trending coins."""

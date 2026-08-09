@@ -4,6 +4,9 @@
 
 A fully automated, risk‑managed trading bot for the **NYSE** (via Interactive Brokers) and multiple crypto exchanges, with paper‑trading support, real‑time alerts, a modular strategy engine, and an interactive dashboard. Built from scratch in Python.
 
+> ⭐ **Enjoying IrieTrade?** Give us a star on [GitHub](https://github.com/Native-254/IrieTrade) and join the [Discussions](https://github.com/Native-254/IrieTrade/discussions) to share your experience!  
+> ✉️ Have a suggestion? Mail us at [info.native@gmail.com](mailto:info.native@gmail.com)
+
 ![Bot Status](https://img.shields.io/badge/status-paper_trading-brightgreen)
 ![License](https://img.shields.io/badge/license-MIT-blue)
 ![Python](https://img.shields.io/badge/python-3.11%2B-blue)
