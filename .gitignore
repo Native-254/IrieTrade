@@ -8,3 +8,4 @@ data/.encryption_key
 config/settings.yaml
 .qodo
 FIX_TODO.md
+data/.welcome_shown

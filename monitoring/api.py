@@ -226,7 +226,8 @@ async def dashboard():
     first_nav = df["nav"].iloc[0] if len(df) else nav
     total_return = (last_nav - first_nav) / first_nav * 100 if first_nav else 0
     daily_change = df["nav"].iloc[-1] - df["nav"].iloc[-2] if len(df) > 1 else 0
-    daily_pct = (daily_change / df["nav"].iloc[-2]) * 100 if len(df) > 1 else 0
+    denom = df["nav"].iloc[-2]
+    daily_pct = (daily_change / denom) * 100 if len(df) > 1 and denom != 0 else 0.0
     current_capital = nav
 
     latest_prices = {}
