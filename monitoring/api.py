@@ -157,6 +157,50 @@ async def api_performance():
     }
 
 
+@app.post("/api/webhook/tradingview")
+async def tradingview_webhook(request: Request):
+    """Receive a TradingView alert and pass it to the engine."""
+    if not trading_engine:
+        return {"error": "Engine not running"}
+
+    try:
+        data = await request.json()
+        symbol = data.get("symbol", "").upper()
+        action = data.get("action", "").upper()
+        quantity = int(data.get("quantity", 0))
+        price = float(data.get("price", 0))
+
+        if not symbol or action not in ("BUY", "SELL", "SELL_SHORT", "BUY_TO_COVER"):
+            return {"error": "Invalid payload"}
+
+        broker_name = "ib"
+        if broker_name not in trading_engine.risk_managers:
+            return {"error": "IBKR broker not available"}
+
+        broker = trading_engine.broker_manager.brokers[broker_name]
+        pm = trading_engine.position_managers[broker_name]
+
+        success = trading_engine._place_trade(
+            broker,
+            pm,
+            symbol,
+            action,
+            quantity,
+            price,
+            stop_loss=0.0,
+            atr=0.0,
+            vol_stop_mult=0.0,
+        )
+        if success:
+            log.success(f"Webhook trade executed: {action} {quantity} {symbol}")
+            return {"status": "ok", "message": f"Trade placed: {action} {quantity} {symbol}"}
+        return {"error": "Trade rejected by risk manager or broker"}
+
+    except Exception as e:  # noqa: BLE001
+        log.error(f"Webhook error: {e}")
+        return {"error": str(e)}
+
+
 @app.get("/dashboard", response_class=HTMLResponse)
 async def dashboard():
     if not trading_engine:

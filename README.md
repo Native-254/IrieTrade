@@ -38,6 +38,17 @@ A fully automated, risk‑managed trading bot for the **NYSE** (via Interactive 
 - **Welcome banner for new users** – first-time dashboard visitors see a friendly toast with links to star the repo, join discussions, and submit feedback.
 - **Maintainer tools** – automatic email alerts when the repository receives new clones (via GitHub API + Brevo).
 
+## 🔗 Integrations
+
+### TradingView Alerts (webhook)
+
+IrieTrade can execute trades based on TradingView alerts.  
+You’ll need a **Pro, Premium, or Expert** TradingView plan to use webhooks.  
+Once set up, paste your ngrok or server URL into the alert’s Webhook URL field.
+
+**Free alternative:**  
+Set up a Gmail‑based alert forwarder (see [docs/integrations/tradingview-free.md](docs/integrations/tradingview-free.md)) that receives email alerts and sends them to IrieTrade’s webhook.
+
 ## 🏗️ Architecture
 
 ```plaintext
