@@ -18,7 +18,7 @@ A fully automated, risk‑managed trading bot for the **NYSE** (via Interactive 
 
 ## ✨ Features
 
-- **Multi-strategy engine** – runs Trend-Following (Long/Short), Trend-Following (Long Only), Mean-Reversion, Opening Range Breakout, and VWAP Reversion simultaneously.
+- **Multi-strategy engine** – runs 12 strategies simultaneously: Trend-Following (Long/Short & Long Only), Mean-Reversion, Opening Range Breakout, VWAP Reversion, MACD, ADX, OBV, Aroon, Stochastic, Fibonacci Retracement, and Ichimoku.
 - **Position-aware signal resolver** – merges signals from all active strategies and resolves conflicts based on your current position, preventing accidental naked short selling and handling reversals safely.
 - **Long/Short capability** – enters both long and short positions with hard bracket stops (IBKR) or market orders (crypto). Short selling is automatically disabled on cash accounts and on crypto exchanges that don't support it.
 - **Multi-platform trading** – supports Interactive Brokers (IBKR), Binance, OKX, Coinbase, Kraken, KuCoin, and a ready-to-use stub for the Nairobi Securities Exchange (NSE).
@@ -35,6 +35,8 @@ A fully automated, risk‑managed trading bot for the **NYSE** (via Interactive 
 - **Modular design** – easy to swap data providers, brokers, or strategies.
 - **Dependency injection** – all major components can be injected for easy unit testing.
 - **Onboarding wizard** – a browser-based setup tool that writes your `.env` and `settings.yaml` without manual editing.
+- **Welcome banner for new users** – first-time dashboard visitors see a friendly toast with links to star the repo, join discussions, and submit feedback.
+- **Maintainer tools** – automatic email alerts when the repository receives new clones (via GitHub API + Brevo).
 
 ## 🏗️ Architecture
 
@@ -54,7 +56,14 @@ trading_bot/
 │   ├── trend_following_long_only.py
 │   ├── mean_revisions.py      # Bollinger Bands + RSI
 │   ├── orb.py                 # Opening Range Breakout
-│   └── vwap_revisions.py      # VWAP mean reversion
+│   ├── vwap_revisions.py      # VWAP mean reversion
+│   ├── macd_cross.py          # MACD crossover strategy
+│   ├── adx_filter.py          # ADX + DI trend filter
+│   ├── obv_divergence.py      # OBV price divergence signals
+│   ├── aroon.py               # Aroon crossover strategy
+│   ├── stochastic.py         # Stochastic crossover strategy
+│   ├── fibonacci.py          # Fibonacci retracement reversals
+│   └── ichimoku.py           # Ichimoku cloud strategy
 ├── backtest/
 │   ├── engine.py              # Loop‑based backtester (uses live resolver)
 │   └── backtest_multi.py      # Multi‑symbol backtest runner
@@ -83,7 +92,9 @@ trading_bot/
 ├── live/
 │   └── engine.py              # Main orchestrator – multi‑broker loop
 ├── tools/
-│   └── scanner.py             # Automated market scanner (stocks & crypto)
+│   ├── scanner.py             # Automated market scanner (stocks & crypto)
+│   ├── sentiment_scanner.py   # Trending crypto scanner (CoinGecko)
+│   └── clone_monitor.py       # GitHub clone notification
 ├── utils/
 │   ├── config.py              # YAML loader with env var override
 │   ├── logger.py              # Loguru configuration
