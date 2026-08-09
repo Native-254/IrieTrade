@@ -1067,12 +1067,14 @@ class TradingEngine:
 
     def _run_trending_scanner(self):
         """Update KuCoin symbols with CoinGecko trending coins."""
+        if self.scanner is None:
+            return 
         log.info("Running trending scanner...")
         trending_pairs = TrendingScanner.trending_usdt_pairs()
         if trending_pairs:
             current = set(self.symbols_by_broker.get("kucoin", []))
-            merged = list(current | set(trending_pairs))[:20]
-            self.symbols_by_broker["kucoin"] = merged
+            new_set = current | set(trending_pairs)
+            self.symbols_by_broker["kucoin"] = list(new_set)[:25]
             log.success(
                 f"KuCoin symbols updated with trending coins: {', '.join(trending_pairs[:5])}..."
             )
