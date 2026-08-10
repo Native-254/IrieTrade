@@ -238,7 +238,7 @@ class TradingEngine:
             else price * (1 - slippage)
         )
 
-    def _calculate_commission(self, quantity: int, price: float) -> float:
+    def _calculate_commission(self, quantity: float, price: float) -> float:
         if not self.config["execution"].get("simulate_commissions", False):
             return 0.0
         trade_value = quantity * price
@@ -289,17 +289,21 @@ class TradingEngine:
                 }
             )
 
-    def _simulate_partial_fill(self, requested_qty: int) -> int:
+    def _simulate_partial_fill(self, requested_qty: float) -> float:
         if not self.config["execution"].get("simulate_partial_fills", False):
             return requested_qty
         ratio = np.random.uniform(
             self.config["execution"].get("partial_fill_min_ratio", 0.8), 1.0
         )
-        filled = int(requested_qty * ratio)
+        filled = (
+            int(requested_qty * ratio)
+            if requested_qty >= 1
+            else requested_qty * ratio
+        )
         log.info(f"Simulated partial fill: {filled}/{requested_qty}")
-        return max(1, filled)
+        return max(1, filled) if requested_qty >= 1 else filled
 
-    def _check_shortable(self, broker, symbol: str, quantity: int) -> bool:
+    def _check_shortable(self, broker, symbol: str, quantity: float) -> bool:
         # Always respect the broker's own capability first
         if not broker.is_shortable(symbol, quantity):
             return False
@@ -331,7 +335,7 @@ class TradingEngine:
         return False
 
     def _check_net_exposure(
-        self, rm, action: str, quantity: int, last_price: float, latest_prices: dict
+        self, rm, action: str, quantity: float, last_price: float, latest_prices: dict
     ) -> bool:
         max_net = self.config["risk_management"].get("max_net_exposure", 1.0)
         if max_net >= 999:
@@ -345,12 +349,29 @@ class TradingEngine:
             return True
         current_net = rm.get_net_exposure(latest_prices)
         new_net = current_net + delta_long - delta_short
-        if abs(new_net) > max_net * rm.current_capital:
+        net_limit = max_net * rm.current_capital
+        if abs(new_net) > net_limit:
+            if abs(current_net) > net_limit and abs(new_net) < abs(current_net):
+                log.info(
+                    f"Allowing {action} because it reduces net exposure "
+                    f"from {current_net:.2f} to {new_net:.2f}"
+                )
+                return True
             log.warning(
-                f"Net exposure {new_net:.2f} exceeds limit {max_net * rm.current_capital:.2f}"
+                f"Net exposure {new_net:.2f} exceeds limit {net_limit:.2f}"
             )
             return False
         return True
+
+    def _get_min_order_notional(self, broker, symbol: str) -> float:
+        getter = getattr(broker, "get_min_order_notional", None)
+        if not callable(getter):
+            return 0.0
+        try:
+            return float(getter(symbol) or 0.0)
+        except Exception as e:  # noqa: BLE001
+            log.debug(f"Could not fetch minimum order notional for {symbol}: {e}")
+            return 0.0
 
     def kelly_fraction(self) -> float:
         if len(self.trade_results) < 5:
@@ -376,7 +397,7 @@ class TradingEngine:
         pm,
         symbol: str,
         action: str,
-        quantity: int,
+        quantity: float,
         last_price: float,
         stop_loss: float,
         atr: float,
@@ -553,6 +574,15 @@ class TradingEngine:
 
             filled_qty = self._simulate_partial_fill(quantity)
             filled_qty = min(filled_qty, pos.quantity)
+            min_notional = self._get_min_order_notional(broker, symbol)
+            order_notional = filled_qty * last_price
+            if min_notional > 0 and order_notional < min_notional:
+                pm.close_position(symbol)
+                log.warning(
+                    f"Skipping exit for {symbol}: notional {order_notional:.8f} "
+                    f"is below broker minimum {min_notional:.8f}; removed dust position."
+                )
+                return False
 
             try:
                 broker.connect()

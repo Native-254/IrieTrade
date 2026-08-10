@@ -7,7 +7,7 @@ from datetime import datetime
 class Position:
     symbol: str
     side: str  # 'BUY' (long) or 'SELL' (short)
-    quantity: int
+    quantity: float
     entry_price: float
     stop_loss: float
     take_profit: float | None = None

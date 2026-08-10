@@ -38,7 +38,7 @@ class RiskManager:
         self,
         symbol: str,
         side: str,
-        quantity: int,
+        quantity: float,
         entry_price: float,
         stop_price: float,
     ) -> tuple[bool, str]:

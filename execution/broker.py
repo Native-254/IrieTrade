@@ -30,7 +30,7 @@ class Broker(ABC):
         self,
         symbol: str,
         side: str,
-        quantity: int,
+        quantity: float,
         order_type: str,
         limit_price: float | None = None,
         stop_price: float | None = None,
@@ -59,7 +59,7 @@ class Broker(ABC):
         Default is True; override for cash‑only accounts or crypto."""
         return True
 
-    def is_shortable(self, symbol: str, quantity: int) -> bool:
+    def is_shortable(self, symbol: str, quantity: float) -> bool:
         """Default: all symbols are shortable (override for real checks)."""
         return self.supports_shorting
 
