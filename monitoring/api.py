@@ -197,8 +197,8 @@ async def tradingview_webhook(request: Request):
         return {"error": "Trade rejected by risk manager or broker"}
 
     except Exception as e:  # noqa: BLE001
-        log.error(f"Webhook error: {e}")
-        return {"error": str(e)}
+        log.exception(f"Webhook error while processing TradingView alert: {e}")
+        return {"error": "Internal webhook processing error"}
 
 
 @app.get("/dashboard", response_class=HTMLResponse)
