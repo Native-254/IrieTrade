@@ -1,5 +1,6 @@
 # execution/ib_broker.py
 import time
+from decimal import Decimal, ROUND_HALF_UP
 
 from ib_async import IB, LimitOrder, MarketOrder, Stock, StopOrder
 
@@ -41,6 +42,30 @@ class IBBroker(Broker):
             log.error(f"Failed to connect to IBKR: {e}")
             raise
 
+    @staticmethod
+    def _round_to_tick(price: float, min_tick: float) -> float:
+        if min_tick <= 0:
+            return float(price)
+        rounded = (
+            Decimal(str(price)) / Decimal(str(min_tick))
+        ).quantize(Decimal("1"), rounding=ROUND_HALF_UP) * Decimal(str(min_tick))
+        return float(rounded)
+
+    def _get_min_tick(self, contract) -> float:
+        try:
+            details = self.ib.reqContractDetails(contract)
+            ticks = [
+                float(getattr(detail, "minTick", 0.0) or 0.0)
+                for detail in details
+            ]
+            return next((tick for tick in ticks if tick > 0), 0.01)
+        except Exception as e:  # noqa: BLE001
+            log.debug(f"Could not fetch min tick for {contract}: {e}")
+            return 0.01
+
+    def _normalize_price(self, contract, price: float) -> float:
+        return self._round_to_tick(float(price), self._get_min_tick(contract))
+
     @property
     def supports_shorting(self) -> bool:
         return self.is_margin
@@ -65,7 +90,7 @@ class IBBroker(Broker):
         self,
         symbol: str,
         side: str,
-        quantity: int,
+        quantity: float,
         order_type: str = "MKT",
         limit_price: float | None = None,
         stop_price: float | None = None,
@@ -88,6 +113,7 @@ class IBBroker(Broker):
         elif order_type.upper() == "LMT":
             if limit_price is None:
                 raise ValueError("Limit price required for LMT order")
+            limit_price = self._normalize_price(contract, limit_price)
             order = LimitOrder(ib_side, quantity, limit_price)
         else:
             raise ValueError(f"Unsupported order type: {order_type}")
@@ -106,7 +132,7 @@ class IBBroker(Broker):
     def place_bracket_short(
         self,
         symbol: str,
-        quantity: int,
+        quantity: float,
         entry_price: float,
         stop_price: float,
         take_profit: float,
@@ -115,6 +141,8 @@ class IBBroker(Broker):
             self.connect()
         contract = Stock(symbol, "SMART", "USD")
         self.ib.qualifyContracts(contract)
+        stop_price = self._normalize_price(contract, stop_price)
+        take_profit = self._normalize_price(contract, take_profit)
         parent = MarketOrder("SELL", quantity)
         parent.tif = "DAY"
         parent.transmit = False
@@ -138,7 +166,7 @@ class IBBroker(Broker):
     def place_bracket_long(
         self,
         symbol: str,
-        quantity: int,
+        quantity: float,
         entry_price: float,
         stop_price: float,
         take_profit: float,
@@ -147,6 +175,8 @@ class IBBroker(Broker):
             self.connect()
         contract = Stock(symbol, "SMART", "USD")
         self.ib.qualifyContracts(contract)
+        stop_price = self._normalize_price(contract, stop_price)
+        take_profit = self._normalize_price(contract, take_profit)
         parent = MarketOrder("BUY", quantity)
         parent.tif = "DAY"
         parent.transmit = False
@@ -182,6 +212,7 @@ class IBBroker(Broker):
         for trade in self.ib.trades():
             if trade.order.orderId == order_id and trade.order.orderType == "STP":
                 self.ib.cancelOrder(trade.order)
+                new_stop = self._normalize_price(trade.contract, new_stop)
                 new_order = StopOrder(
                     trade.order.action, trade.order.totalQuantity, new_stop, tif="DAY"
                 )
@@ -221,7 +252,7 @@ class IBBroker(Broker):
             )
         return positions
 
-    def is_shortable(self, symbol: str, quantity: int) -> bool:
+    def is_shortable(self, symbol: str, quantity: float) -> bool:
         if not self.supports_shorting:
             log.info(f"Short sale of {symbol} blocked – cash account.")
             return False
