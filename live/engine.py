@@ -367,7 +367,7 @@ class TradingEngine:
         if not callable(getter):
             return 0.0
         try:
-            return float(getter(symbol) or 0.0) # type: ignore
+            return float(getter(symbol) or 0.0)  # type: ignore
         except Exception as e:  # noqa: BLE001
             log.debug(f"Could not fetch minimum order notional for {symbol}: {e}")
             return 0.0
@@ -936,6 +936,27 @@ class TradingEngine:
                 )
                 if not order_valid:
                     log.warning(f"Order rejected: {msg}")
+                    continue
+
+                # ── NEW: Hard single-name concentration check ──
+                existing_pos = pm.positions.get(symbol)
+                existing_notional = existing_pos.quantity * last_price if existing_pos else 0.0
+                new_notional = existing_notional + (quantity * last_price)
+                if new_notional > max_single + 1e-6:
+                    log.warning(
+                        f"Single-name limit for {symbol}: existing {existing_notional:.2f}, "
+                        f"proposed {quantity * last_price:.2f}, total {new_notional:.2f} > {max_single:.2f}"
+                    )
+                    continue
+
+                # ── NEW: Hard gross exposure check ──
+                current_gross = rm.get_gross_exposure(latest_prices)
+                if current_gross + (quantity * last_price) > max_gross + 1e-6:
+                    log.warning(
+                        f"Gross exposure limit would be breached for {symbol}: "
+                        f"current {current_gross:.2f}, proposed {quantity * last_price:.2f}, "
+                        f"limit {max_gross:.2f}"
+                    )
                     continue
 
                 if not self._check_net_exposure(
