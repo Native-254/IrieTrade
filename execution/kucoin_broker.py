@@ -1,4 +1,3 @@
-# execution/kucoin_broker.py
 import time
 
 import ccxt
@@ -148,19 +147,32 @@ class KucoinBroker(Broker):
         if not self.connected:
             self.connect()
         assert self.exchange is not None
+
         balance = self.exchange.fetch_balance()
         positions = []
+        stablecoins = {"USDT", "USDC", "USD", "TUSD", "BUSD", "DAI", "USDP", "GUSD"}
+
+        # Use local variable to satisfy Pylance and guard against None
+        markets = getattr(self.exchange, "markets", None) or {}
+
         for asset, amount in balance["total"].items():
             amt = float(str(amount)) if amount else 0.0
-            if amt > 0.0:
-                positions.append(
-                    {
-                        "symbol": asset,
-                        "quantity": amt,
-                        "avg_cost": 0.0,
-                        "market_value": 0.0,
-                    }
-                )
+            if amt <= 0.0 or asset in stablecoins:
+                continue
+
+            symbol = f"{asset}/USDT"
+            # Only include assets that actually have a USDT market
+            if symbol not in markets:
+                continue
+
+            positions.append(
+                {
+                    "symbol": symbol,
+                    "quantity": amt,
+                    "avg_cost": 0.0,          # unknown until trade history is fetched
+                    "market_value": 0.0,
+                }
+            )
         return positions
 
     def is_shortable(self, symbol: str, quantity: float) -> bool:

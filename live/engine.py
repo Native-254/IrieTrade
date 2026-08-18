@@ -1,4 +1,3 @@
-# live/engine.py
 import csv
 import os
 import threading
@@ -57,13 +56,13 @@ class TradingEngine:
         self.position_managers: dict[str, PositionManager] = {}
         self.symbols_by_broker: dict[str, list[str]] = {}
         self.broker_latest_prices: dict[str, dict] = {}
-        self.broker_last_logged_qty: dict[str, dict[str, int]] = {}
+        self.broker_last_logged_qty: dict[str, dict[str, float]] = {}
         self.broker_available: dict[str, bool] = {}
 
         for broker_name, broker in self.broker_manager.iterate_all():
             try:
                 account = broker.get_account_info()
-                capital = account["net_liquidation"]
+                capital = float(account["net_liquidation"])
                 self.broker_available[broker_name] = True
             except Exception as e:  # noqa: BLE001
                 log.warning(
@@ -368,7 +367,7 @@ class TradingEngine:
         if not callable(getter):
             return 0.0
         try:
-            return float(getter(symbol) or 0.0)
+            return float(getter(symbol) or 0.0) # type: ignore
         except Exception as e:  # noqa: BLE001
             log.debug(f"Could not fetch minimum order notional for {symbol}: {e}")
             return 0.0
@@ -615,18 +614,24 @@ class TradingEngine:
                     else avg_price + (commission / filled_qty)
                 )
 
-                pnl_frac = (
-                    (net_close_price - pos.entry_price) / pos.entry_price
-                    if pos.side == "BUY"
-                    else (pos.entry_price - net_close_price) / pos.entry_price
-                )
+                if pos.entry_price <= 0:
+                    log.warning(f"Unknown entry price for {symbol}; treating close as no P&L.")
+                    pnl_frac = 0.0
+                    pnl_dollar = 0.0
+                else:
+                    pnl_frac = (
+                        (net_close_price - pos.entry_price) / pos.entry_price
+                        if pos.side == "BUY"
+                        else (pos.entry_price - net_close_price) / pos.entry_price
+                    )
+                    pnl_dollar = (
+                        (net_close_price - pos.entry_price) * filled_qty
+                        if pos.side == "BUY"
+                        else (pos.entry_price - net_close_price) * filled_qty
+                    )
+
                 self.trade_results.append(("win" if pnl_frac > 0 else "loss", pnl_frac))
 
-                pnl_dollar = (
-                    (net_close_price - pos.entry_price) * filled_qty
-                    if pos.side == "BUY"
-                    else (pos.entry_price - net_close_price) * filled_qty
-                )
                 self._log_trade(
                     symbol,
                     action,
@@ -672,12 +677,11 @@ class TradingEngine:
 
             rm = self.risk_managers[broker_name]
             pm = self.position_managers[broker_name]
-            symbols = list(set(self.symbols_by_broker[broker_name]) | set(pm.positions.keys()))
             last_logged_qty = self.broker_last_logged_qty.setdefault(broker_name, {})
 
             try:
                 account = broker.get_account_info()
-                capital = account["net_liquidation"]
+                capital = float(account["net_liquidation"])
             except Exception as e:  # noqa: BLE001
                 log.warning(f"Could not reach '{broker_name}': {e}. Skipping iteration.")
                 continue
@@ -689,8 +693,8 @@ class TradingEngine:
                 )
                 continue
 
-            if broker_name == "ib":
-                self._sync_positions_from_broker(broker, pm)
+            # Sync positions for all brokers (IBKR and KuCoin)
+            self._sync_positions_from_broker(broker, pm)
 
             for sym, pos in pm.positions.items():
                 last_logged_qty[sym] = pos.quantity
@@ -698,7 +702,7 @@ class TradingEngine:
             latest_prices = {}
 
             now_utc = datetime.now(timezone.utc)
-            for sym, pos in list(pm.positions.items()):  # ← FIX: iterate over snapshot
+            for sym, pos in list(pm.positions.items()):
                 if self._is_crypto(sym):
                     df = self._get_crypto_data(broker, sym, limit=200)
                 else:
@@ -742,7 +746,6 @@ class TradingEngine:
                     log.warning(
                         f"Stop-loss triggered for {sym} ({broker_name}) at {last_price:.2f}. Attempting to close."
                     )
-                    # If we have no broker stop order, close immediately via market order
                     if not pos.stop_order_id:
                         success = self._place_trade(
                             broker,
@@ -769,6 +772,9 @@ class TradingEngine:
             rm.recalc_open_risk(latest_prices)
 
             # ──────────── Signal generation (per‑broker strategies) ────────────
+            symbols = list(
+                set(self.symbols_by_broker[broker_name]) | set(pm.positions.keys())
+            )
             broker_strategies = self.strategies_by_broker.get(broker_name, self.strategies)
 
             for symbol in symbols:
@@ -866,10 +872,10 @@ class TradingEngine:
                             f"Exit executed: {action} {quantity} {symbol} on {broker_name}"
                         )
                         self.telegram.send_trade_alert(
-                            symbol, action, quantity, last_price
+                            symbol, action, quantity, last_price  # type: ignore[arg-type]
                         )
                         self.discord.send_trade_alert(
-                            symbol, action, quantity, last_price
+                            symbol, action, quantity, last_price  # type: ignore[arg-type]
                         )
                     continue
 
@@ -957,8 +963,12 @@ class TradingEngine:
                     log.success(
                         f"LIVE PAPER ORDER: {action} {quantity} {symbol} on {broker_name}"
                     )
-                    self.telegram.send_trade_alert(symbol, action, quantity, last_price)
-                    self.discord.send_trade_alert(symbol, action, quantity, last_price)
+                    self.telegram.send_trade_alert(
+                        symbol, action, quantity, last_price  # type: ignore[arg-type]
+                    )
+                    self.discord.send_trade_alert(
+                        symbol, action, quantity, last_price  # type: ignore[arg-type]
+                    )
 
             combined_nav += capital
 
@@ -969,26 +979,28 @@ class TradingEngine:
     # Helpers
     # ------------------------------------------------------------------
     def _sync_positions_from_broker(self, broker, pm):
-        if broker.__class__.__name__ != "IBBroker":
-            return
+        """Synchronise internal positions with broker positions for any broker."""
         try:
-            ib_positions = broker.get_positions()
-            symbols_in_ib = {p["symbol"] for p in ib_positions}
+            broker_positions = broker.get_positions()
+            symbols_in_broker = {p["symbol"] for p in broker_positions}
             for sym in list(pm.positions.keys()):
-                if sym not in symbols_in_ib:
+                if sym not in symbols_in_broker:
                     pm.close_position(sym)
                     log.warning(f"Removed stale position {sym}")
-            for ib_pos in ib_positions:
-                sym = ib_pos["symbol"]
-                qty = ib_pos["quantity"]
-                avg_cost = ib_pos["avg_cost"]
+
+            for broker_pos in broker_positions:
+                sym = broker_pos["symbol"]
+                qty = broker_pos["quantity"]
+                avg_cost = broker_pos.get("avg_cost", 0.0)
+
                 if qty == 0:
                     if sym in pm.positions:
                         pm.close_position(sym)
                     continue
+
                 side = "BUY" if qty > 0 else "SELL"
-                # Safe initial stop: for shorts use inf, for longs use 0.0
-                init_stop = float('inf') if side == "SELL" else 0.0
+                init_stop = float("inf") if side == "SELL" else 0.0
+
                 if sym not in pm.positions:
                     pm.open_position(
                         Position(
@@ -1003,9 +1015,10 @@ class TradingEngine:
                     pos = pm.positions[sym]
                     pos.quantity = abs(qty)
                     pos.entry_price = avg_cost
-                    # If existing stop is missing or stuck at the old default, re-init
-                    if pos.stop_loss is None or (pos.side == "SELL" and pos.stop_loss == 0.0):
-                        pos.stop_loss = float('inf') if pos.side == "SELL" else 0.0
+                    if pos.stop_loss is None or (
+                        pos.side == "SELL" and pos.stop_loss == 0.0
+                    ):
+                        pos.stop_loss = init_stop
         except Exception as e:  # noqa: BLE001
             log.error(f"Position sync failed: {e}")
 
@@ -1034,7 +1047,8 @@ class TradingEngine:
             )
             action = "SELL" if pos.side == "BUY" else "BUY_TO_COVER"
             self._log_trade(
-                sym, action, exit_qty, pos.entry_price, exit_price, pnl_dollar, pos.side            )
+                sym, action, exit_qty, pos.entry_price, exit_price, pnl_dollar, pos.side
+            )
             last_logged_qty[sym] = current_qty
         for sym, pos in pm.positions.items():
             last_logged_qty[sym] = pos.quantity
@@ -1048,7 +1062,6 @@ class TradingEngine:
         schedule.every().hour.at(":01").do(self.run_iteration)
         schedule.every().day.at("00:01").do(self._reset_daily_pnl)
 
-        # Scanner scheduling – separate jobs for stocks and crypto
         if self.scanner_enabled and self.scanner:
             scan_time = self.config["scanner"].get("time", "08:00")
             schedule.every().day.at(scan_time).do(self._run_stock_scanner)
