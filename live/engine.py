@@ -679,13 +679,27 @@ class TradingEngine:
             pm = self.position_managers[broker_name]
             last_logged_qty = self.broker_last_logged_qty.setdefault(broker_name, {})
 
-            try:
-                account = broker.get_account_info()
-                capital = float(account["net_liquidation"])
-            except Exception as e:  # noqa: BLE001
-                log.warning(f"Could not reach '{broker_name}': {e}. Skipping iteration.")
+            account: dict[str, object] | None = None
+            last_error: Exception | None = None
+            for attempt in range(2):  # one retry
+                try:
+                    account = broker.get_account_info()
+                    break
+                except Exception as e:  # noqa: BLE001
+                    last_error = e
+                    if attempt == 0:
+                        log.warning(
+                            f"Retrying '{broker_name}' account fetch after error: {e}"
+                        )
+                        time.sleep(5)
+
+            if account is None:
+                log.warning(
+                    f"Could not reach '{broker_name}' after retries: {last_error}. Skipping iteration."
+                )
                 continue
 
+            capital = float(account["net_liquidation"]) 
             rm.update_portfolio(capital - rm.current_capital, 0)
             if not rm.can_trade():
                 log.warning(
