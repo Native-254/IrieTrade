@@ -699,7 +699,7 @@ class TradingEngine:
                 )
                 continue
 
-            capital = float(account["net_liquidation"]) 
+            capital = float(account["net_liquidation"])  # pyright: ignore[reportArgumentType] # type: ignore
             rm.update_portfolio(capital - rm.current_capital, 0)
             if not rm.can_trade():
                 log.warning(
