@@ -1,6 +1,7 @@
 """Trending crypto scanner using CoinGecko public API (no API key)."""
 
 import requests
+
 from utils.logger import log
 
 
@@ -18,7 +19,7 @@ class TrendingScanner:
             coins = [item["item"]["symbol"].upper() for item in data.get("coins", [])]
             log.info(f"Trending coins fetched: {', '.join(coins[:10])}")
             return coins
-        except Exception as e:
+        except Exception as e:  # noqa: BLE001
             log.warning(f"Failed to fetch trending coins: {e}")
             return []
 
