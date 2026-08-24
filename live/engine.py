@@ -663,6 +663,116 @@ class TradingEngine:
         return False
 
     # ------------------------------------------------------------------
+    # De-risking & rotation
+    # ------------------------------------------------------------------
+    def _enforce_risk_limits(self, broker, pm, rm, latest_prices: dict, capital: float):
+        """Reduce positions that breach risk limits."""
+        max_single = capital * rm.config.get(
+            "max_position_pct",
+            self.config["risk_management"]["max_position_pct"],
+        )
+        max_gross = capital * rm.config.get(
+            "max_gross_exposure",
+            self.config["risk_management"]["max_gross_exposure"],
+        )
+        max_net = capital * rm.config.get(
+            "max_net_exposure",
+            self.config["risk_management"]["max_net_exposure"],
+        )
+
+        # Single-name concentration
+        for sym, pos in list(pm.positions.items()):
+            price = latest_prices.get(sym, pos.entry_price)
+            if price <= 0:
+                continue
+            notional = pos.quantity * price
+            if notional > max_single + 1e-6:
+                excess = notional - max_single
+                reduce_qty = excess / price
+                side = "SELL" if pos.side == "BUY" else "BUY_TO_COVER"
+                log.warning(
+                    f"De-risking {sym}: reducing {reduce_qty:.2f} shares to enforce single-name limit."
+                )
+                self._place_trade(broker, pm, sym, side, reduce_qty, price, 0.0, 0.0, 0.0)
+
+        # Gross exposure
+        current_gross = rm.get_gross_exposure(latest_prices)
+        if current_gross > max_gross + 1e-6:
+            overage = current_gross - max_gross
+            positions_sorted = sorted(
+                pm.positions.items(),
+                key=lambda kv: kv[1].quantity * latest_prices.get(kv[0], kv[1].entry_price),
+                reverse=True,
+            )
+            for sym, pos in positions_sorted:
+                if overage <= 0:
+                    break
+                price = latest_prices.get(sym, pos.entry_price)
+                if price <= 0:
+                    continue
+                notional = pos.quantity * price
+                reduce_notional = min(notional, overage)
+                reduce_qty = reduce_notional / price
+                side = "SELL" if pos.side == "BUY" else "BUY_TO_COVER"
+                log.warning(
+                    f"De-risking gross: reducing {sym} by {reduce_qty:.2f} to lower total exposure."
+                )
+                self._place_trade(broker, pm, sym, side, reduce_qty, price, 0.0, 0.0, 0.0)
+                overage -= reduce_notional
+
+        # Net exposure
+        current_net = rm.get_net_exposure(latest_prices)
+        if abs(current_net) > max_net + 1e-6:
+            overage_net = abs(current_net) - max_net
+            target_side = "BUY" if current_net > 0 else "SELL"
+            positions_sorted = sorted(
+                pm.positions.items(),
+                key=lambda kv: kv[1].quantity * latest_prices.get(kv[0], kv[1].entry_price),
+                reverse=True,
+            )
+            for sym, pos in positions_sorted:
+                if overage_net <= 0:
+                    break
+                if pos.side != target_side:
+                    continue
+                price = latest_prices.get(sym, pos.entry_price)
+                if price <= 0:
+                    continue
+                notional = pos.quantity * price
+                reduce_notional = min(notional, overage_net)
+                reduce_qty = reduce_notional / price
+                side = "SELL" if pos.side == "BUY" else "BUY_TO_COVER"
+                log.warning(
+                    f"De-risking net: reducing {sym} by {reduce_qty:.2f} to lower net exposure."
+                )
+                self._place_trade(broker, pm, sym, side, reduce_qty, price, 0.0, 0.0, 0.0)
+                overage_net -= reduce_notional
+
+    def _rotate_underperformers(
+        self, broker, pm, latest_prices: dict, active_symbols: list[str]
+    ):
+        """Close losing positions that are no longer in the active symbol list."""
+        active_set = set(active_symbols)
+        for sym, pos in list(pm.positions.items()):
+            if sym in active_set:
+                continue
+            price = latest_prices.get(sym, pos.entry_price)
+            if price <= 0 or pos.entry_price <= 0:
+                continue
+
+            if pos.side == "BUY":
+                pnl_pct = (price - pos.entry_price) / pos.entry_price
+            else:
+                pnl_pct = (pos.entry_price - price) / pos.entry_price
+
+            if pnl_pct < 0:
+                side = "SELL" if pos.side == "BUY" else "BUY_TO_COVER"
+                log.warning(
+                    f"Rotating out underperforming {sym}: P&L {pnl_pct:.2%}. Closing position."
+                )
+                self._place_trade(broker, pm, sym, side, pos.quantity, price, 0.0, 0.0, 0.0)
+
+    # ------------------------------------------------------------------
     # Main iteration loop – runs over all brokers
     # ------------------------------------------------------------------
     def run_iteration(self):
@@ -784,6 +894,15 @@ class TradingEngine:
             self._reconcile_and_log_closed_positions(pm, last_logged_qty, latest_prices)
             self.broker_latest_prices[broker_name] = latest_prices
             rm.recalc_open_risk(latest_prices)
+
+            # ── NEW: Enforce hard risk limits ──
+            self._enforce_risk_limits(broker, pm, rm, latest_prices, capital)
+
+            # ── NEW: Rotate underperformers if enabled ──
+            if self.config.get("rotation", {}).get("enabled", False):
+                self._rotate_underperformers(
+                    broker, pm, latest_prices, self.symbols_by_broker[broker_name]
+                )
 
             # ──────────── Signal generation (per‑broker strategies) ────────────
             symbols = list(

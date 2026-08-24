@@ -1,7 +1,9 @@
+# config/settings.yaml
+
 general:
   bot_name: "IrieTrade"
   log_level: "INFO"
-  timezone: "[your timezone]"
+  timezone: [your timezone]
 
 trading:
   platform: "ib"
@@ -11,7 +13,7 @@ trading:
   symbols: ["AAPL", "MSFT", "GOOGL"]
   symbols_by_broker:
     ib:
-      - "AAPL"      # sample symbols
+      - "AAPL"             # sample symbols
       - "MSFT"
       - "GOOGL"
       - "TSLA"
@@ -82,6 +84,12 @@ trading:
       - "XRP/USDT"
       - "DOGE/USDT"
       - "LINK/USDT"
+      - "SOL/USDT"
+      - "AVAX/USDT"
+      - "DOT/USDT"
+      - "APT/USDT"
+      - "SUI/USDT"
+      - "LTC/USDT"
 
 exchanges:
   ib:
@@ -97,7 +105,7 @@ exchanges:
   kraken:
     testnet: true
   kucoin:
-    testnet: false  # set to testnet to gauge bot performance
+    testnet: false   # set to testnet to gauge bot performance
 
 data:
   sources:
@@ -114,14 +122,14 @@ risk_management:
   max_drawdown: 0.20
   volatility_stop_multiplier: 2.0
   max_net_exposure: 0.5
-  max_gross_exposure: 1.5
-  max_position_pct: 0.20
+  max_gross_exposure: 2.5
+  max_position_pct: 0.25
   per_symbol_multipliers:
     QBTS: 4.0
     OPTT: 4.5
 
   risk_by_broker:
-    kucoin:                               # tighter risk management for small balances 
+    kucoin:                           # tighter risk management for small balances
       max_gross_exposure: 5.0
       max_position_pct: 0.50
       max_net_exposure: 1.0
@@ -146,6 +154,27 @@ strategies:
       type: "technical"
       enabled: true
     - name: "VWAPReversion"
+      type: "technical"
+      enabled: true
+    - name: "MACDCross"
+      type: "technical"
+      enabled: true
+    - name: "ADXTrendFilter"
+      type: "technical"
+      enabled: true
+    - name: "OBVDivergence"
+      type: "technical"
+      enabled: true
+    - name: "AroonCross"
+      type: "technical"
+      enabled: true
+    - name: "StochasticCross"
+      type: "technical"
+      enabled: true
+    - name: "FibonacciRetracement"
+      type: "technical"
+      enabled: true
+    - name: "IchimokuCloud"
       type: "technical"
       enabled: true
     - name: "Breakout"
@@ -201,6 +230,31 @@ strategies:
       rsi_period: 14
       rsi_oversold: 30
       rsi_overbought: 70
+    macd_cross:
+      fast: 12
+      slow: 26
+      signal: 9
+    adx_trend_filter:
+      period: 14
+      adx_threshold: 20
+    obv_divergence:
+      lookback: 20
+    aroon_cross:
+      period: 25
+    stochastic_cross:
+      k_period: 14
+      d_period: 3
+      overbought: 80
+      oversold: 20
+    fibonacci_retracement:
+      swing_lookback: 50
+      volume_factor: 1.5
+      sma_period: 50
+    ichimoku_cloud:
+      tenkan: 9
+      kijun: 26
+      senkou_b: 52
+      chikou_shift: 26
     intraday:
       trend_following:
         fast_ma: 20
@@ -241,8 +295,29 @@ monitoring:
   telegram:
     enabled: true
     bot_token: ""
-    chat_id: ""  # add this in .env
+    chat_id: ""   # add this in  .env
   discord:
     enabled: true
     webhook_url: "https://discord.com/api/webhooks/..."
   health_check_port: 8000
+
+scanner:
+  enabled: true                    # set to true to enable auto-scanning
+  schedule: "daily"                 # daily or weekly
+  time: "08:00"                     # UTC time to run
+  universe: ["SP500"]                      # stocks to scan; if empty, uses ib symbol list
+  criteria:
+    min_price: 10.0
+    max_price: 500.0
+    min_avg_volume: 500000
+    above_sma50: true
+    rsi_min: 40
+    rsi_max: 70
+    min_volatility_ratio: 0.02
+    max_volatility_ratio: 0.10
+  crypto_criteria:
+    min_volume_usdt: 500000
+  top_n: 10
+
+rotation:
+  enabled: true                     # automatically exit losing positions not in scanner list

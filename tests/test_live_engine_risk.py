@@ -39,6 +39,7 @@ def _engine_for_unit_tests():
             "simulate_commissions": False,
         },
         "risk_management": {"max_net_exposure": 0.5},
+        "rotation": {"enabled": False},
     }
     engine.email = _EmailStub()
     return engine
@@ -85,3 +86,34 @@ def test_crypto_dust_exit_is_removed_before_broker_order():
     assert result is False
     assert not pm.has_position("DOT/USDT")
     assert broker.order_was_placed is False
+
+
+def test_enforce_risk_limits_reduces_single_name_breach():
+    engine = _engine_for_unit_tests()
+    broker = _DustBrokerStub()  # supports min notional, will not place unexpected orders
+    pm = PositionManager()
+    pm.open_position(Position("UNH", "BUY", 2000, 400.0, 0.0))
+    rm = RiskManager(100_000.0, position_manager=pm)
+    rm.config["max_position_pct"] = 0.25
+    rm.config["max_gross_exposure"] = 2.5
+    rm.config["max_net_exposure"] = 0.5
+
+    engine._enforce_risk_limits(
+        broker, pm, rm, {"UNH": 400.0}, 100_000.0
+    )
+
+    assert pm.positions["UNH"].quantity < 2000
+    assert pm.positions["UNH"].quantity == 625  # 25% of 100k / 400 = 625
+
+
+def test_rotate_underperformers_closes_losing_stale_position():
+    engine = _engine_for_unit_tests()
+    broker = _DustBrokerStub()
+    pm = PositionManager()
+    pm.open_position(Position("OLD", "BUY", 100, 50.0, 0.0))
+
+    engine._rotate_underperformers(
+        broker, pm, {"OLD": 40.0}, ["NEW"]
+    )
+
+    assert not pm.has_position("OLD")
