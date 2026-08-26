@@ -535,8 +535,6 @@ class TradingEngine:
                         source=self._get_broker_source(broker)
                     )
                     return False
-                finally:
-                    broker.disconnect()
 
             # Plain market order
             if not use_bracket:
@@ -594,8 +592,6 @@ class TradingEngine:
                         source=self._get_broker_source(broker)
                     )
                     return False
-                finally:
-                    broker.disconnect()
 
         # ---------- EXIT ----------
         else:
@@ -713,8 +709,6 @@ class TradingEngine:
                     source=self._get_broker_source(broker)
                 )
                 return False
-            finally:
-                broker.disconnect()
 
         return False
 

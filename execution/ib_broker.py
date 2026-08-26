@@ -1,6 +1,6 @@
 # execution/ib_broker.py
 import time
-from decimal import Decimal, ROUND_HALF_UP
+from decimal import ROUND_HALF_UP, Decimal
 
 from ib_async import IB, LimitOrder, MarketOrder, Stock, StopOrder
 
@@ -48,7 +48,7 @@ class IBBroker(Broker):
             return float(price)
         rounded = (
             Decimal(str(price)) / Decimal(str(min_tick))
-        ).quantize(Decimal("1"), rounding=ROUND_HALF_UP) * Decimal(str(min_tick))
+        ).quantize(Decimal(1), rounding=ROUND_HALF_UP) * Decimal(str(min_tick))
         return float(rounded)
 
     def _get_min_tick(self, contract) -> float:
@@ -110,6 +110,7 @@ class IBBroker(Broker):
         self.ib.qualifyContracts(contract)
         if order_type.upper() == "MKT":
             order = MarketOrder(ib_side, quantity)
+            order.tif = "IOC"
         elif order_type.upper() == "LMT":
             if limit_price is None:
                 raise ValueError("Limit price required for LMT order")
@@ -144,7 +145,7 @@ class IBBroker(Broker):
         stop_price = self._normalize_price(contract, stop_price)
         take_profit = self._normalize_price(contract, take_profit)
         parent = MarketOrder("SELL", quantity)
-        parent.tif = "DAY"
+        parent.tif = "IOC"
         parent.transmit = False
         stop = StopOrder("BUY", quantity, stop_price)
         stop.tif = "DAY"
@@ -178,7 +179,7 @@ class IBBroker(Broker):
         stop_price = self._normalize_price(contract, stop_price)
         take_profit = self._normalize_price(contract, take_profit)
         parent = MarketOrder("BUY", quantity)
-        parent.tif = "DAY"
+        parent.tif = "IOC"
         parent.transmit = False
         stop = StopOrder("SELL", quantity, stop_price)
         stop.tif = "DAY"
@@ -253,6 +254,8 @@ class IBBroker(Broker):
         return positions
 
     def is_shortable(self, symbol: str, quantity: float) -> bool:
+        if not self.connected:
+            self.connect()
         if not self.supports_shorting:
             log.info(f"Short sale of {symbol} blocked – cash account.")
             return False
@@ -275,6 +278,8 @@ class IBBroker(Broker):
             return False
 
     def wait_for_fill(self, order_id: int, timeout: int = 30) -> dict:
+        if not self.connected:
+            self.connect()
         start = time.time()
         while time.time() - start < timeout:
             for trade in self.ib.trades():
