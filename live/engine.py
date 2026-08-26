@@ -745,6 +745,17 @@ class TradingEngine:
             if notional > max_single + 1e-6:
                 excess = notional - max_single
                 reduce_qty = excess / price
+
+                # IBKR only accepts whole stocks
+                if not self._is_crypto(sym):
+                    reduce_qty = int(reduce_qty)
+                    if reduce_qty <= 0:
+                        log.warning(
+                            f"De-risk reduction for {sym} is less than 1 share;"
+                            "unable to reduce further"
+                        )
+                        continue
+                        
                 side = "SELL" if pos.side == "BUY" else "BUY_TO_COVER"
                 log.warning(
                     f"De-risking {sym}: reducing {reduce_qty:.2f} shares to enforce single-name limit."
@@ -769,6 +780,12 @@ class TradingEngine:
                 notional = pos.quantity * price
                 reduce_notional = min(notional, overage)
                 reduce_qty = reduce_notional / price
+
+                if not self._is_crypto(sym):
+                    reduce_qty = int(reduce_qty)
+                    if reduce_qty <=0:
+                        continue
+                    
                 side = "SELL" if pos.side == "BUY" else "BUY_TO_COVER"
                 log.warning(
                     f"De-risking gross: reducing {sym} by {reduce_qty:.2f} to lower total exposure."
