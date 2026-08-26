@@ -58,6 +58,7 @@ class TradingEngine:
         self.broker_latest_prices: dict[str, dict] = {}
         self.broker_last_logged_qty: dict[str, dict[str, float]] = {}
         self.broker_available: dict[str, bool] = {}
+        self.symbol_cooldowns: dict[str, datetime] = {}
 
         for broker_name, broker in self.broker_manager.iterate_all():
             try:
@@ -188,12 +189,25 @@ class TradingEngine:
         self.symbols_by_broker.clear()
         self.broker_latest_prices.clear()
         self.broker_last_logged_qty.clear()
+        self.symbol_cooldowns.clear()
         log.info("Teardown complete. Engine is clean.")
 
     def restart_with_new_config(self, new_config):
         log.info("Restarting engine with new configuration…")
         self._teardown()
         self.__init__(config=new_config)
+
+    # ------------------------------------------------------------------
+    # Helper to identify broker source for error threading
+    # ------------------------------------------------------------------
+    def _get_broker_source(self, broker) -> str:
+        """Return a short source label for the given broker instance."""
+        name = broker.__class__.__name__
+        if name == "IBBroker":
+            return "ib"
+        if name == "KucoinBroker":
+            return "kucoin"
+        return "general"
 
     # ------------------------------------------------------------------
     # Crypto data fetcher (uses ccxt broker directly)
@@ -403,7 +417,10 @@ class TradingEngine:
         vol_stop_mult: float,
     ) -> bool:
         if self._earnings_nearby(symbol):
-            self.email.send_error_alert(f"Trade skipped for {symbol}: earnings nearby.")
+            self.email.send_error_alert(
+                f"Trade skipped for {symbol}: earnings nearby.",
+                source=self._get_broker_source(broker)
+            )
             log.warning(f"Earnings nearby for {symbol}, trade blocked.")
             return False
 
@@ -411,7 +428,8 @@ class TradingEngine:
             broker, symbol, quantity
         ):
             self.email.send_error_alert(
-                f"Short sale rejected for {symbol}: not enough shares"
+                f"Short sale rejected for {symbol}: not enough shares",
+                source=self._get_broker_source(broker)
             )
             return False
 
@@ -421,6 +439,15 @@ class TradingEngine:
         if action in ("BUY", "SELL_SHORT"):
             filled_qty = self._simulate_partial_fill(quantity)
             if filled_qty <= 0:
+                return False
+
+            min_notional = self._get_min_order_notional(broker, symbol)
+            order_notional = filled_qty * slipped_price
+            if min_notional > 0 and order_notional < min_notional:
+                log.warning(
+                    f"Skipping entry for {symbol}: notional {order_notional:.8f} "
+                    f"is below broker minimum {min_notional:.8f}."
+                )
                 return False
 
             use_bracket = getattr(broker, "supports_bracket", True)
@@ -455,7 +482,8 @@ class TradingEngine:
                     if not order_id:
                         log.error(f"Failed to place bracket order for {symbol}")
                         self.email.send_error_alert(
-                            f"Trade failed for {symbol}: bracket order rejected"
+                            f"Trade failed for {symbol}: bracket order rejected",
+                            source=self._get_broker_source(broker)
                         )
                         return False
 
@@ -463,7 +491,8 @@ class TradingEngine:
                     if fill["status"] != "Filled" or fill["filled"] == 0:
                         log.error(f"Order not filled for {symbol}: {fill['status']}")
                         self.email.send_error_alert(
-                            f"Trade failed for {symbol}: order not filled"
+                            f"Trade failed for {symbol}: order not filled",
+                            source=self._get_broker_source(broker)
                         )
                         return False
 
@@ -501,7 +530,10 @@ class TradingEngine:
                     use_bracket = False
                 except Exception as e:  # noqa: BLE001
                     log.exception(f"Entry execution error for {symbol}: {e}")
-                    self.email.send_error_alert(f"Trade failed for {symbol}: {e}")
+                    self.email.send_error_alert(
+                        f"Trade failed for {symbol}: {e}",
+                        source=self._get_broker_source(broker)
+                    )
                     return False
                 finally:
                     broker.disconnect()
@@ -519,7 +551,8 @@ class TradingEngine:
                     if not order_result or not order_result.get("order_id"):
                         log.error(f"Plain order failed for {symbol}: no order ID")
                         self.email.send_error_alert(
-                            f"Trade failed for {symbol}: plain order rejected"
+                            f"Trade failed for {symbol}: plain order rejected",
+                            source=self._get_broker_source(broker)
                         )
                         return False
 
@@ -556,7 +589,10 @@ class TradingEngine:
 
                 except Exception as e:  # noqa: BLE001
                     log.exception(f"Entry error for {symbol}: {e}")
-                    self.email.send_error_alert(f"Trade failed for {symbol}: {e}")
+                    self.email.send_error_alert(
+                        f"Trade failed for {symbol}: {e}",
+                        source=self._get_broker_source(broker)
+                    )
                     return False
                 finally:
                     broker.disconnect()
@@ -567,7 +603,8 @@ class TradingEngine:
             if not pos:
                 log.warning(f"No internal position for {symbol}")
                 self.email.send_error_alert(
-                    f"Trade failed for {symbol}: no position to close"
+                    f"Trade failed for {symbol}: no position to close",
+                    source=self._get_broker_source(broker)
                 )
                 return False
 
@@ -591,7 +628,8 @@ class TradingEngine:
                 if not order_result:
                     log.error(f"Failed to place closing order for {symbol}")
                     self.email.send_error_alert(
-                        f"Trade failed for {symbol}: closing order rejected"
+                        f"Trade failed for {symbol}: closing order rejected",
+                        source=self._get_broker_source(broker)
                     )
                     return False
 
@@ -601,7 +639,8 @@ class TradingEngine:
                         f"Closing order not filled for {symbol}: {fill['status']}"
                     )
                     self.email.send_error_alert(
-                        f"Trade failed for {symbol}: closing order not filled"
+                        f"Trade failed for {symbol}: closing order not filled",
+                        source=self._get_broker_source(broker)
                     )
                     return False
 
@@ -647,6 +686,20 @@ class TradingEngine:
                 else:
                     pos.quantity -= filled_qty
 
+                # ── Cooldown on loss ──
+                if pnl_frac < 0:
+                    cooldown_minutes = self.config.get("rotation", {}).get(
+                        "cooldown_minutes", 240
+                    )
+                    cooldown_until = datetime.now(timezone.utc) + timedelta(
+                        minutes=cooldown_minutes
+                    )
+                    self.symbol_cooldowns[symbol] = cooldown_until
+                    log.info(
+                        f"Set cooldown for {symbol} until {cooldown_until.isoformat()} "
+                        f"after losing trade ({pnl_frac:.2%})."
+                    )
+
                 self.email.send_trade_alert(symbol, action, filled_qty, avg_price)
                 log.success(
                     f"Closed {action} {filled_qty} {symbol} @ ${avg_price:.2f}, P&L {pnl_frac:.4%}"
@@ -655,7 +708,10 @@ class TradingEngine:
 
             except Exception as e:  # noqa: BLE001
                 log.exception(f"Exit execution error for {symbol}: {e}")
-                self.email.send_error_alert(f"Trade failed for {symbol}: {e}")
+                self.email.send_error_alert(
+                    f"Trade failed for {symbol}: {e}",
+                    source=self._get_broker_source(broker)
+                )
                 return False
             finally:
                 broker.disconnect()
@@ -769,6 +825,44 @@ class TradingEngine:
                 side = "SELL" if pos.side == "BUY" else "BUY_TO_COVER"
                 log.warning(
                     f"Rotating out underperforming {sym}: P&L {pnl_pct:.2%}. Closing position."
+                )
+                self._place_trade(broker, pm, sym, side, pos.quantity, price, 0.0, 0.0, 0.0)
+
+    def _apply_dynamic_exits(
+        self, broker, pm, latest_prices: dict, capital: float
+    ):
+        """Close positions based on time held and unrealized loss."""
+        rotation_cfg = self.config.get("rotation", {})
+        max_holding_hours = rotation_cfg.get("max_holding_hours", 48)
+        max_unrealized_loss_pct = rotation_cfg.get("max_unrealized_loss_pct", -0.05)
+
+        now = datetime.now(timezone.utc)
+        for sym, pos in list(pm.positions.items()):
+            price = latest_prices.get(sym, pos.entry_price)
+            if price <= 0 or pos.entry_price <= 0:
+                continue
+
+            # Time-based exit
+            if pos.entry_time is not None:
+                holding_hours = (now - pos.entry_time).total_seconds() / 3600.0
+                if holding_hours > max_holding_hours:
+                    side = "SELL" if pos.side == "BUY" else "BUY_TO_COVER"
+                    log.warning(
+                        f"Time stop triggered for {sym}: held {holding_hours:.1f}h > {max_holding_hours}h."
+                    )
+                    self._place_trade(broker, pm, sym, side, pos.quantity, price, 0.0, 0.0, 0.0)
+                    continue
+
+            # Unrealized loss exit
+            if pos.side == "BUY":
+                pnl_pct = (price - pos.entry_price) / pos.entry_price
+            else:
+                pnl_pct = (pos.entry_price - price) / pos.entry_price
+
+            if pnl_pct < max_unrealized_loss_pct:
+                side = "SELL" if pos.side == "BUY" else "BUY_TO_COVER"
+                log.warning(
+                    f"Drawdown stop triggered for {sym}: P&L {pnl_pct:.2%} < {max_unrealized_loss_pct:.2%}."
                 )
                 self._place_trade(broker, pm, sym, side, pos.quantity, price, 0.0, 0.0, 0.0)
 
@@ -895,14 +989,15 @@ class TradingEngine:
             self.broker_latest_prices[broker_name] = latest_prices
             rm.recalc_open_risk(latest_prices)
 
-            # ── NEW: Enforce hard risk limits ──
+            # ── Enforce hard risk limits ──
             self._enforce_risk_limits(broker, pm, rm, latest_prices, capital)
 
-            # ── NEW: Rotate underperformers if enabled ──
+            # ── Rotation & dynamic exits ──
             if self.config.get("rotation", {}).get("enabled", False):
                 self._rotate_underperformers(
                     broker, pm, latest_prices, self.symbols_by_broker[broker_name]
                 )
+                self._apply_dynamic_exits(broker, pm, latest_prices, capital)
 
             # ──────────── Signal generation (per‑broker strategies) ────────────
             symbols = list(
@@ -913,6 +1008,15 @@ class TradingEngine:
             for symbol in symbols:
                 pos = pm.positions.get(symbol)
                 current_side = pos.side if pos else None
+
+                # ── Cooldown check for new entries ──
+                if pos is None and symbol in self.symbol_cooldowns:
+                    cooldown_until = self.symbol_cooldowns[symbol]
+                    if datetime.now(timezone.utc) < cooldown_until:
+                        log.info(
+                            f"Skipping {symbol}: in cooldown until {cooldown_until.isoformat()}."
+                        )
+                        continue
 
                 if self._is_crypto(symbol):
                     df = self._get_crypto_data(broker, symbol, limit=200)
@@ -1052,7 +1156,10 @@ class TradingEngine:
 
                 proposed_notional = quantity * last_price
                 if proposed_notional > notional_budget:
-                    scaled_qty = int(notional_budget / last_price) if last_price > 0 else 0
+                    if self._is_crypto(symbol):
+                        scaled_qty = notional_budget / last_price if last_price > 0 else 0.0
+                    else:
+                        scaled_qty = int(notional_budget / last_price) if last_price > 0 else 0
                     if scaled_qty < quantity:
                         log.info(
                             f"Scaling {symbol} quantity {quantity} → {scaled_qty} to fit limits "
@@ -1071,7 +1178,7 @@ class TradingEngine:
                     log.warning(f"Order rejected: {msg}")
                     continue
 
-                # ── NEW: Hard single-name concentration check ──
+                # ── Hard single-name concentration check ──
                 existing_pos = pm.positions.get(symbol)
                 existing_notional = existing_pos.quantity * last_price if existing_pos else 0.0
                 new_notional = existing_notional + (quantity * last_price)
@@ -1082,7 +1189,7 @@ class TradingEngine:
                     )
                     continue
 
-                # ── NEW: Hard gross exposure check ──
+                # ── Hard gross exposure check ──
                 current_gross = rm.get_gross_exposure(latest_prices)
                 if current_gross + (quantity * last_price) > max_gross + 1e-6:
                     log.warning(

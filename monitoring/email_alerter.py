@@ -1,4 +1,3 @@
-# monitoring/email_alerter.py
 import os
 
 import requests
@@ -7,6 +6,12 @@ from utils.logger import log
 
 
 class EmailAlerter:
+    # Fixed thread IDs used for grouping in the recipient's email client
+    THREAD_TRADES = "irietrade-trades@irietrade.me"
+    THREAD_ERRORS_IB = "irietrade-errors-ib@irietrade.me"
+    THREAD_ERRORS_KUCOIN = "irietrade-errors-kucoin@irietrade.me"
+    THREAD_ERRORS_GENERAL = "irietrade-errors-general@irietrade.me"
+
     def __init__(self):
         self.sender = os.getenv("EMAIL_SENDER")
         self.api_key = os.getenv("EMAIL_BREVO_API_KEY")
@@ -18,8 +23,13 @@ class EmailAlerter:
         if self.enabled:
             log.info("Email alerter initialized (Brevo API).")
 
-    def send_message(self, subject: str, body_html: str):
-        """Send an HTML email via Brevo API."""
+    def _send_with_thread(
+        self,
+        subject: str,
+        body_html: str,
+        thread_id: str | None = None,
+    ):
+        """Send an HTML email via Brevo API with optional threading headers."""
         if not self.enabled:
             return
 
@@ -31,6 +41,12 @@ class EmailAlerter:
             "subject": subject,
             "htmlContent": body_html,
         }
+
+        if thread_id:
+            payload["headers"] = {
+                "In-Reply-To": f"<{thread_id}>",
+                "References": f"<{thread_id}>",
+            }
 
         try:
             resp = requests.post(url, json=payload, headers=headers, timeout=10)
@@ -53,7 +69,7 @@ class EmailAlerter:
         """
 
     def send_trade_alert(self, symbol: str, action: str, quantity: int, price: float):
-        subject = f"IrieTrade Alert: {action} {quantity} {symbol} @ ${price:,.2f}"
+        subject = f"[IrieTrade Trades] {action} {quantity} {symbol} @ ${price:,.2f}"
         action_color = "#00b894" if action in ("BUY", "BUY_TO_COVER") else "#e17055"
         body = f"""
         <html>
@@ -84,10 +100,21 @@ class EmailAlerter:
         </body>
         </html>
         """
-        self.send_message(subject, body)
+        self._send_with_thread(subject, body, self.THREAD_TRADES)
 
-    def send_error_alert(self, error_msg: str):
-        subject = "IrieTrade Error Alert"
+    def send_error_alert(self, error_msg: str, source: str = "general"):
+        source = source.lower()
+        if source == "ib":
+            thread_id = self.THREAD_ERRORS_IB
+            prefix = "[IBKR]"
+        elif source == "kucoin":
+            thread_id = self.THREAD_ERRORS_KUCOIN
+            prefix = "[KuCoin]"
+        else:
+            thread_id = self.THREAD_ERRORS_GENERAL
+            prefix = "[General]"
+
+        subject = f"IrieTrade Error {prefix}"
         body = f"""
         <html>
         <body style="font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; background-color: #0b111a; color: #dfe6e9; padding: 20px;">
@@ -102,4 +129,4 @@ class EmailAlerter:
         </body>
         </html>
         """
-        self.send_message(subject, body)
+        self._send_with_thread(subject, body, thread_id)
