@@ -18,7 +18,7 @@ A fully automated, risk‑managed trading bot for the **NYSE** (via Interactive 
 
 ## ✨ Features
 
-- **Multi-strategy engine** – runs 12 strategies simultaneously: Trend-Following (Long/Short & Long Only), Mean-Reversion, Opening Range Breakout, VWAP Reversion, MACD, ADX, OBV, Aroon, Stochastic, Fibonacci Retracement, and Ichimoku.
+- **Multi-strategy engine** – runs 13 strategies simultaneously: Trend-Following (Long/Short & Long Only), Mean-Reversion, Opening Range Breakout, VWAP Reversion, MACD, ADX, OBV, Aroon, Stochastic, Fibonacci Retracement, Ichimoku, and 5-8-13 SMA alignment.
 - **Position-aware signal resolver** – merges signals from all active strategies and resolves conflicts based on your current position, preventing accidental naked short selling and handling reversals safely.
 - **Long/Short capability** – enters both long and short positions with hard bracket stops (IBKR) or market orders (crypto). Short selling is automatically disabled on cash accounts and on crypto exchanges that don't support it.
 - **Multi-platform trading** – supports Interactive Brokers (IBKR), Binance, OKX, Coinbase, Kraken, KuCoin, and a ready-to-use stub for the Nairobi Securities Exchange (NSE).
@@ -74,6 +74,7 @@ trading_bot/
 │   ├── aroon.py               # Aroon crossover strategy
 │   ├── stochastic.py         # Stochastic crossover strategy
 │   ├── fibonacci.py          # Fibonacci retracement reversals
+│   ├── sma_5_8_13.py         # 5-8-13 SMA alignment strategy
 │   └── ichimoku.py           # Ichimoku cloud strategy
 ├── backtest/
 │   ├── engine.py              # Loop‑based backtester (uses live resolver)
@@ -197,6 +198,7 @@ The bot supports multiple strategies simultaneously. Signals are collected from 
 - `MeanReversion` – Long when price is below the lower Bollinger Band and RSI < 30; exit long when above the upper band and RSI > 70.
 - `OpeningRangeBreakout` – Long/short breakouts from the first 30 minutes with volume filter.
 - `VWAPReversion` – Anchored VWAP ±2 SD bands with RSI confirmation; long at lower band (RSI<30), short at upper band (RSI>70).
+- `SMA5813` – Enters on 5-SMA/8-SMA crossovers when aligned above or below the 13-SMA; exits on opposing crosses or slow-SMA breaks.
 
 ### Resolver Logic
 
