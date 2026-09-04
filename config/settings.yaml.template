@@ -180,6 +180,9 @@ strategies:
     - name: "Breakout"
       type: "technical"
       enabled: false
+    - name: "SMA5813"
+      type: "technical"
+      enabled: true
 
   strategies_by_broker:
     kucoin:
@@ -193,6 +196,9 @@ strategies:
         type: "technical"
         enabled: true
       - name: "VWAPReversion"
+        type: "technical"
+        enabled: true
+      - name: "SMA5813"
         type: "technical"
         enabled: true
 
@@ -255,6 +261,10 @@ strategies:
       kijun: 26
       senkou_b: 52
       chikou_shift: 26
+    sma_5_8_13:
+      fast_ma: 5
+      mid_ma: 8
+      slow_ma: 13
     intraday:
       trend_following:
         fast_ma: 20

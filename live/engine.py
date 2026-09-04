@@ -29,6 +29,7 @@ from strategies.mean_revisions import MeanReversion
 from strategies.obv_divergence import OBVDivergence
 from strategies.orb import OpeningRangeBreakout
 from strategies.signals import Signal
+from strategies.sma_5_8_13 import SMA5813Strategy
 from strategies.stochastic import StochasticCross
 from strategies.trend_following_long_only import TrendFollowingLongOnly
 from strategies.trend_following_ls import TrendFollowingLS
@@ -111,6 +112,8 @@ class TradingEngine:
                 params_key = name.lower().replace(" ", "_")
                 if name == "TrendFollowingLongOnly":
                     params_key = "trend_following_long_only"
+                elif name == "SMA5813":
+                    params_key = "sma_5_8_13"
                 params = intraday_params.get(
                     params_key, self.config["strategies"]["parameters"].get(params_key, {})
                 )
@@ -138,6 +141,8 @@ class TradingEngine:
                     loaded.append(FibonacciRetracement(params))
                 elif name == "IchimokuCloud":
                     loaded.append(IchimokuCloud(params))
+                elif name == "SMA5813":
+                    loaded.append(SMA5813Strategy(params))
                 elif name == "Breakout":
                     log.warning("Breakout strategy not implemented – skipping.")
                 else:
