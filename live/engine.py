@@ -11,6 +11,10 @@ import schedule
 import uvicorn
 import yfinance as yf
 
+# Health endpoint imports
+from fastapi import FastAPI
+from pydantic import BaseModel
+
 from data.manager import DataManager
 from execution.broker_manager import BrokerManager
 from monitoring.api import app as api_app
@@ -39,9 +43,19 @@ from tools.sentiment_scanner import TrendingScanner
 from utils.config import CONFIG
 from utils.logger import log
 
+from fastapi import FastAPI
+from pydantic import BaseModel
+from threading import Thread
+import time
+
+# Global start time for health endpoint uptime calculation
+START_TIME = time.time()
+# Global engine instance for health endpoint access
+_engine_instance = None
+
 
 class TradingEngine:
-    def __init__(self, config: dict | None = None):
+def __init__(self, config: dict | None = None):
         log.info("Initializing Trading Engine…")
         self.config = config or CONFIG
         self.data_manager = DataManager()
@@ -169,9 +183,76 @@ class TradingEngine:
             log.info("First‑run welcome flag set – dashboard will show toast.")
 
         log.success("Trading Engine initialized.")
+        global _engine_instance
+        _engine_instance = self
 
-    # ------------------------------------------------------------------
-    # Teardown & Restart
+# -------------------------------------------------
+# Health endpoint
+# -------------------------------------------------
+class HealthStatus(BaseModel):
+    status: str
+    ibkr_connected: bool
+    data_fresh: bool
+    last_error: str | None = None
+    uptime_sec: float
+
+# Create a separate FastAPI app for health
+health_app = FastAPI()
+
+@health_app.get("/health", response_model=HealthStatus)
+def health():
+    # TODO: Replace these stubs with actual checks from your engine
+    ibkr_connected = check_ibkr_connection()      # implement this function
+    data_fresh = is_data_fresh()                  # implement this function
+    last_error = get_last_error() if hasattr(globals(), 'get_last_error') else None
+    uptime_sec = time.time() - getattr(globals(), 'START_TIME', time.time())
+    return HealthStatus(
+        status="ok" if ibkr_connected and data_fresh else "degraded",
+        ibkr_connected=ibkr_connected,
+        data_fresh=data_fresh,
+        last_error=last_error,
+        uptime_sec=uptime_sec
+    )
+
+def run_health_server():
+    # Runs on localhost:8000; change port if needed
+    uvicorn.run(health_app, host="127.0.0.1", port=8000, log_level="error")
+
+# -------------------------------------------------
+# Health endpoint implementation
+# -------------------------------------------------
+def check_ibkr_connection() -> bool:
+    """Return True if IBKR connection is alive."""
+    if _engine_instance is None:
+        return False
+    try:
+        for broker_name, broker in _engine_instance.broker_manager.iterate_all():
+            if broker_name == "ib" and hasattr(broker, 'isConnected'):
+                return broker.isConnected()
+            # Fallback: check broker_available flag
+            if broker_name == "ib" and _engine_instance.broker_available.get(broker_name, False):
+                return True
+    except Exception as e:
+        log.warning(f"Error checking IBKR connection: {e}")
+    return False
+
+def is_data_fresh() -> bool:
+    """Return True if market data is updating within expected interval."""
+    if _engine_instance is None:
+        return False
+    # Consider data fresh if we have any latest prices
+    return bool(_engine_instance.broker_latest_prices)
+
+def get_last_error() -> str | None:
+    """Return the most recent error message, if any."""
+    if _engine_instance is None:
+        return None
+    # For now, we don't store a last error centrally.
+    # Could be extended to capture exceptions from loops.
+    return getattr(_engine_instance, 'last_error', None)
+
+# ------------------------------------------------------------------
+# Teardown & Restart
     # ------------------------------------------------------------------
     def _teardown(self):
         """Cleanly tear down all engine resources before re-initialising."""
@@ -1356,6 +1437,11 @@ class TradingEngine:
         )
         api_thread.start()
         log.success(f"Dashboard available at http://localhost:{api_port}/dashboard")
+
+        # Start health endpoint server
+        health_thread = threading.Thread(target=run_health_server, daemon=True)
+        health_thread.start()
+        log.info("Health endpoint available at http://127.0.0.1:8000/health")
 
         while self.is_running:
             schedule.run_pending()
