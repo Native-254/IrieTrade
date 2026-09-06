@@ -9,3 +9,5 @@ config/settings.yaml
 .qodo
 FIX_TODO.md
 data/.welcome_shown
+live/data/.encryption_key
+engine.py.backup

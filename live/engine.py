@@ -1367,7 +1367,8 @@ class TradingEngine:
         # Start health endpoint server
         health_thread = threading.Thread(target=run_health_server, daemon=True)
         health_thread.start()
-        log.info("Health endpoint available at http://127.0.0.1:8000/health")
+        health_port = 8001
+        log.info(f"Health endpoint available at http://127.0.0.1:{health_port}/health")
 
         while self.is_running:
             schedule.run_pending()
@@ -1460,7 +1461,7 @@ def health() -> HealthStatus:
 
 
 def run_health_server() -> None:
-    uvicorn.run(health_app, host="127.0.0.1", port=8000, log_level="error")
+    uvicorn.run(health_app, host="127.0.0.1", port=8001, log_level="error")
 
 
 def check_ibkr_connection() -> bool:

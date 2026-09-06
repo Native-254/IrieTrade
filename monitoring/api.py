@@ -339,47 +339,89 @@ async def dashboard():
         <title>Irie Trade – Live Dashboard</title>
         <style>
             :root {{
+                color-scheme: light;
+                --bg: #f4f5f7;
+                --surface: #ffffff;
+                --surface-muted: #f8f9fb;
+                --border: #e7e9ee;
+                --text: #15171a;
+                --muted: #7d8490;
+                --accent: #121416;
+                --positive: #159a62;
+                --negative: #d94f5c;
+                --shadow: 0 14px 40px rgba(28, 35, 45, 0.07);
+                font-family: 'Archivo', 'Segoe UI', sans-serif;
+                background: var(--bg);
+                color: var(--text);
+            }}
+            :root[data-theme="dark"] {{
                 color-scheme: dark;
-                font-family: 'Inter', 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
-                background: #080c14;
-                color: #e9edf5;
+                --bg: #0d1015;
+                --surface: #151922;
+                --surface-muted: #1b202a;
+                --border: #292f3a;
+                --text: #f5f7fa;
+                --muted: #9ca5b3;
+                --accent: #f5f7fa;
+                --positive: #43d18b;
+                --negative: #ff7a86;
+                --shadow: 0 16px 44px rgba(0, 0, 0, 0.24);
             }}
             * {{ box-sizing: border-box; }}
+            html {{ scroll-behavior: smooth; }}
             body {{
                 margin: 0;
                 min-height: 100vh;
+                background: var(--bg);
+                color: var(--text);
+                transition: background 180ms ease, color 180ms ease;
             }}
-            .layout {{ display: grid; grid-template-columns: 260px 1fr; gap: 24px; padding: 24px; background: radial-gradient(circle at top left, rgba(0, 184, 148, 0.12), transparent 28%), radial-gradient(circle at bottom right, rgba(255, 121, 198, 0.08), transparent 30%), #080c14; }}
-            .sidebar {{ background: rgba(12, 18, 31, 0.95); border: 1px solid rgba(255,255,255,0.06); border-radius: 28px; padding: 28px; display: flex; flex-direction: column; gap: 28px; }}
-            .brand {{ display: flex; align-items: center; gap: 14px; }}
-            .brand-dot {{ width: 14px; height: 14px; border-radius: 50%; background: linear-gradient(135deg, #00e6b8, #00a0ff); }}
-            .brand-title {{ font-size: 24px; font-weight: 800; letter-spacing: -0.02em; color: #ffffff; }}
-            .nav-item {{ display: block; padding: 14px 16px; border-radius: 18px; color: #b0becd; text-decoration: none; transition: all 0.2s ease; }}
-            .nav-item.active, .nav-item:hover {{ background: rgba(255,255,255,0.06); color: #ffffff; }}
-            .panel {{ background: rgba(13, 21, 37, 0.95); border: 1px solid rgba(255,255,255,0.06); border-radius: 28px; padding: 24px; backdrop-filter: blur(18px); }}
-            .panel-header {{ display: flex; justify-content: space-between; align-items: flex-start; gap: 12px; margin-bottom: 20px; }}
-            .panel-header h1 {{ margin: 0; font-size: 32px; letter-spacing: -0.04em; }}
-            .panel-header p {{ margin: 6px 0 0; color: #94a3b8; }}
-            .grid-cols-2 {{ display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 20px; }}
-            .stat-grid {{ display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 18px; margin-top: 18px; }}
-            .stat-card {{ background: linear-gradient(180deg, rgba(255,255,255,0.04), rgba(255,255,255,0.01)); border: 1px solid rgba(255,255,255,0.06); border-radius: 24px; padding: 20px; }}
-            .stat-label {{ font-size: 12px; text-transform: uppercase; letter-spacing: 0.14em; color: #7b8a99; margin-bottom: 10px; }}
-            .stat-value {{ font-size: 28px; font-weight: 700; line-height: 1.1; }}
-            .stat-subtext {{ margin-top: 8px; color: #7b8a99; font-size: 13px; }}
-            .metric-positive {{ color: #00d084; }}
-            .metric-negative {{ color: #ff7c7c; }}
-            .asset-grid {{ display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 18px; margin-top: 18px; }}
-            .asset-card {{ background: rgba(6, 12, 24, 0.92); border: 1px solid rgba(255,255,255,0.05); border-radius: 24px; padding: 20px; }}
-            .asset-card h3 {{ margin: 0; font-size: 18px; }}
-            .asset-value {{ font-size: 22px; font-weight: 700; margin-top: 12px; }}
-            .asset-change {{ margin-top: 8px; color: #7b8a99; }}
-            .positions-table {{ width: 100%; border-collapse: collapse; margin-top: 14px; }}
-            .positions-table th, .positions-table td {{ padding: 14px 12px; text-align: left; border-bottom: 1px solid rgba(255,255,255,0.06); font-size: 14px; }}
-            .positions-table th {{ color: #94a3b8; font-weight: 600; }}
-            .positions-empty td {{ color: #7b8a99; text-align: center; }}
-            .chart-card {{ min-height: 420px; }}
-            .footer {{ margin-top: 24px; text-align: center; color: #5f788f; font-size: 13px; }}
-            @media (max-width: 1100px) {{ .layout {{ grid-template-columns: 1fr; }} .stat-grid, .asset-grid {{ grid-template-columns: 1fr; }} }}
+            .layout {{ display: grid; grid-template-columns: 224px minmax(0, 1fr); gap: 30px; max-width: 1560px; margin: 0 auto; padding: 28px 32px 40px; }}
+            .sidebar {{ position: sticky; top: 28px; height: calc(100vh - 56px); background: var(--surface); border: 1px solid var(--border); border-radius: 18px; padding: 24px 16px; display: flex; flex-direction: column; box-shadow: var(--shadow); }}
+            .brand {{ display: flex; align-items: center; gap: 11px; padding: 0 10px 34px; }}
+            .brand-dot {{ width: 12px; height: 12px; border-radius: 3px; background: var(--accent); }}
+            .brand-title {{ font-size: 21px; font-weight: 700; letter-spacing: -0.04em; }}
+            .nav-label {{ padding: 0 12px 10px; color: var(--muted); font-size: 10px; font-weight: 700; letter-spacing: 0.14em; text-transform: uppercase; }}
+            .nav-item {{ display: flex; align-items: center; min-height: 42px; padding: 0 12px; margin: 2px 0; border-radius: 9px; color: var(--muted); text-decoration: none; font-size: 13px; font-weight: 600; transition: background 180ms ease, color 180ms ease; }}
+            .nav-item.active, .nav-item:hover {{ background: var(--surface-muted); color: var(--text); }}
+            .sidebar-footer {{ margin-top: auto; padding: 16px 12px 0; border-top: 1px solid var(--border); color: var(--muted); font-size: 11px; line-height: 1.5; }}
+            main {{ min-width: 0; }}
+            .topbar {{ display: flex; justify-content: space-between; align-items: center; gap: 20px; margin-bottom: 28px; }}
+            .eyebrow {{ color: var(--muted); font-size: 11px; font-weight: 700; letter-spacing: 0.12em; text-transform: uppercase; }}
+            .topbar h2 {{ margin: 5px 0 0; font-size: 24px; letter-spacing: -0.04em; }}
+            .topbar-actions {{ display: flex; align-items: center; gap: 10px; }}
+            .theme-toggle {{ min-height: 40px; padding: 0 14px; border: 1px solid var(--border); border-radius: 9px; background: var(--surface); color: var(--text); cursor: pointer; font: inherit; font-size: 12px; font-weight: 700; transition: background 180ms ease, border-color 180ms ease; }}
+            .theme-toggle:hover {{ background: var(--surface-muted); }}
+            .theme-toggle:focus-visible {{ outline: 3px solid rgba(21, 154, 98, 0.25); outline-offset: 2px; }}
+            .status-pill {{ display: inline-flex; align-items: center; gap: 7px; min-height: 34px; padding: 0 11px; border-radius: 999px; background: var(--surface-muted); color: var(--text); font-size: 12px; font-weight: 700; }}
+            .status-pill::before {{ content: ''; width: 7px; height: 7px; border-radius: 50%; background: var(--positive); }}
+            .panel {{ background: var(--surface); border: 1px solid var(--border); border-radius: 16px; padding: 26px; margin-bottom: 20px; box-shadow: var(--shadow); }}
+            .panel-header {{ display: flex; justify-content: space-between; align-items: flex-start; gap: 18px; margin-bottom: 22px; }}
+            .panel-header h1 {{ margin: 0; font-size: 22px; letter-spacing: -0.04em; }}
+            .panel-header p {{ margin: 7px 0 0; color: var(--muted); font-size: 13px; }}
+            .stat-grid {{ display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 1px; overflow: hidden; border: 1px solid var(--border); border-radius: 12px; background: var(--border); }}
+            .stat-card {{ min-width: 0; background: var(--surface); padding: 18px; }}
+            .stat-label {{ font-size: 10px; text-transform: uppercase; letter-spacing: 0.1em; color: var(--muted); margin-bottom: 11px; }}
+            .stat-value {{ font-size: 24px; font-weight: 700; line-height: 1.1; letter-spacing: -0.04em; overflow-wrap: anywhere; }}
+            .stat-subtext {{ margin-top: 8px; color: var(--muted); font-size: 11px; }}
+            .metric-positive {{ color: var(--positive); }}
+            .metric-negative {{ color: var(--negative); }}
+            .asset-grid {{ display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 12px; margin-top: 16px; }}
+            .asset-card {{ background: var(--surface-muted); border: 1px solid var(--border); border-radius: 12px; padding: 17px; }}
+            .asset-card h3 {{ margin: 0; font-size: 13px; font-weight: 700; }}
+            .asset-value {{ font-size: 20px; font-weight: 700; margin-top: 14px; letter-spacing: -0.03em; }}
+            .asset-change {{ margin-top: 7px; color: var(--muted); font-size: 11px; line-height: 1.4; }}
+            .positions-table {{ width: 100%; border-collapse: collapse; margin-top: 4px; }}
+            .positions-table th, .positions-table td {{ padding: 14px 12px; text-align: left; border-bottom: 1px solid var(--border); font-size: 13px; white-space: nowrap; }}
+            .positions-table th {{ color: var(--muted); font-size: 10px; font-weight: 700; letter-spacing: 0.08em; text-transform: uppercase; }}
+            .positions-table tr:last-child td {{ border-bottom: 0; }}
+            .positions-empty td {{ color: var(--muted); text-align: center; }}
+            .chart-card {{ min-height: 420px; padding-top: 18px; }}
+            .footer {{ margin-top: 26px; text-align: center; color: var(--muted); font-size: 11px; }}
+            @media (max-width: 1180px) {{ .layout {{ grid-template-columns: 190px minmax(0, 1fr); padding: 22px; gap: 20px; }} .stat-grid {{ grid-template-columns: repeat(2, minmax(0, 1fr)); }} .asset-grid {{ grid-template-columns: repeat(2, minmax(0, 1fr)); }} }}
+            @media (max-width: 760px) {{ .layout {{ display: block; padding: 14px; }} .sidebar {{ position: static; height: auto; margin-bottom: 18px; padding: 14px; }} .brand {{ padding: 4px 8px 16px; }} .nav-label, .sidebar-footer {{ display: none; }} .sidebar nav {{ display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 4px; }} .nav-item {{ justify-content: center; padding: 0 6px; text-align: center; font-size: 11px; }} .topbar {{ align-items: flex-start; margin-bottom: 18px; }} .topbar h2 {{ font-size: 20px; }} .panel {{ padding: 18px; border-radius: 13px; }} .panel-header {{ flex-direction: column; }} .stat-grid, .asset-grid {{ grid-template-columns: 1fr 1fr; }} .stat-card {{ padding: 14px; }} .stat-value {{ font-size: 20px; }} .chart-card {{ min-height: 320px; overflow: hidden; }} }}
+            @media (max-width: 420px) {{ .stat-grid, .asset-grid {{ grid-template-columns: 1fr; }} .topbar-actions {{ flex-direction: column; align-items: flex-end; }} .theme-toggle {{ min-height: 36px; }} }}
+            @media (prefers-reduced-motion: reduce) {{ *, *::before, *::after {{ scroll-behavior: auto !important; transition-duration: 0.01ms !important; }} }}
         </style>
     </head>
     <body>
@@ -389,22 +431,31 @@ async def dashboard():
                     <div class="brand-dot"></div>
                     <div class="brand-title">IrieTrade</div>
                 </div>
-                <a class="nav-item active" href="#overview">Live Dashboard</a>
-                <a class="nav-item" href="#positions">Portfolio</a>
-                <a class="nav-item" href="#alerts">Alerts</a>
-                <a class="nav-item" href="/setup">Settings</a>
-                <a class="nav-item" href="#support">Support</a>
+                <div class="nav-label">Workspace</div>
+                <nav aria-label="Dashboard navigation">
+                    <a class="nav-item active" href="#overview">Overview</a>
+                    <a class="nav-item" href="#positions">Portfolio</a>
+                    <a class="nav-item" href="#alerts">Alerts</a>
+                    <a class="nav-item" href="/setup">Settings</a>
+                </nav>
+                <div class="sidebar-footer">Read-only dashboard<br>Updates every hour</div>
             </aside>
             <main>
+                <header class="topbar">
+                    <div>
+                        <div class="eyebrow">Trading workspace</div>
+                        <h2>Portfolio overview</h2>
+                    </div>
+                    <div class="topbar-actions">
+                        <div class="status-pill">{bot_status}</div>
+                        <button class="theme-toggle" id="theme-toggle" type="button" aria-label="Switch color theme">Dark mode</button>
+                    </div>
+                </header>
                 <section id="overview" class="panel">
                     <div class="panel-header">
                         <div>
                             <h1>Live portfolio overview</h1>
                             <p>Monitor NAV, risk, positions, and bot health without interrupting execution.</p>
-                        </div>
-                        <div>
-                            <div class="stat-label">Status</div>
-                            <div class="stat-value">{bot_status}</div>
                         </div>
                     </div>
                     <div class="stat-grid">
@@ -515,6 +566,21 @@ async def dashboard():
             </main>
         </div>
     <script>
+        const root = document.documentElement;
+        const themeToggle = document.getElementById('theme-toggle');
+        const savedTheme = localStorage.getItem('irietrade-theme');
+        const preferredTheme = savedTheme || (window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light');
+
+        function applyTheme(theme) {{
+            root.dataset.theme = theme;
+            themeToggle.textContent = theme === 'dark' ? 'Light mode' : 'Dark mode';
+            themeToggle.setAttribute('aria-label', theme === 'dark' ? 'Switch to light mode' : 'Switch to dark mode');
+            localStorage.setItem('irietrade-theme', theme);
+        }}
+
+        applyTheme(preferredTheme);
+        themeToggle.addEventListener('click', () => applyTheme(root.dataset.theme === 'dark' ? 'light' : 'dark'));
+
         fetch('/api/first-run')
             .then(r => r.json())
             .then(data => {{

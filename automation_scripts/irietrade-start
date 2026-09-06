@@ -1,0 +1,189 @@
+#!/usr/bin/env bash
+# Store this file at: ~/.local/bin/irietrade-start
+# ~/.local/bin/irietrade-start
+set -euo pipefail
+IFS=$'\n\t'
+
+# =============================================
+# CONFIGURATION (adjust to your setup)
+# =============================================
+PROJECT_DIR="${HOME}/Projects 2026/trading_bot"
+VENV_DIR="${PROJECT_DIR}/venv"
+LOG_DIR="${PROJECT_DIR}/logs"
+IB_PORT=4002                      # IBKR Gateway API port
+MAX_INIT_RETRIES=5                # How many times to retry IBKR/gateway init
+RETRY_BASE_DELAY=5                # Seconds (exponential backoff)
+HEALTH_CHECK_URL="http://127.0.0.1:8001/health"  # If you expose a health endpoint
+# =============================================
+
+# ---- Helper functions -------------------------------------------------
+log() {
+    echo "$(date '+%Y-%m-%d %H:%M:%S') | ${*}"
+}
+
+log_json() {
+    # Output a single-line JSON log for easy parsing
+    local level="$1"; shift
+    local message="$*"
+    # Use jq if available, otherwise fallback to simple echo
+    if command -v jq >/dev/null 2>&1; then
+        jq -n --arg ts "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+             --arg lvl "$level" \
+             --arg msg "$message" \
+             '{timestamp: $ts, level: $lvl, message: $msg}'
+    else
+        echo "{\"timestamp\":\"$(date -u +%Y-%m-%dT%H:%M:%SZ)\",\"level\":\"$level\",\"message\":\"$message\"}"
+    fi
+}
+
+check_command() {
+    command -v "$1" >/dev/null 2>&1
+}
+
+wait_for_port() {
+    local port="$1"; local timeout="$2"; local elapsed=0
+    while (( elapsed < timeout )); do
+        if nc -z 127.0.0.1 "$port"; then
+            return 0
+        fi
+        sleep 1
+        ((elapsed++))
+    done
+    return 1
+}
+
+# ---- Pre-flight checks ------------------------------------------------
+log "Starting IrieTrade autonomous launcher..."
+
+# 1. Time sync (requires NOPASSWD sudoers rule - already configured per your notes)
+if check_command timedatectl; then
+    if ! timedatectl show -p NTPSynchronized --value | grep -q yes; then
+        log_json warn "Time not synchronized. Attempting to start systemd-timesyncd..."
+        sudo systemctl start systemd-timesyncd 2>/dev/null || true
+        sleep 3
+        if ! timedatectl show -p NTPSynchronized --value | grep -q yes; then
+            log_json error "Time synchronization failed. Continuing anyway (may cause IBKR auth issues)."
+        else
+            log_json info "Time synchronized via systemd-timesyncd."
+        fi
+    else
+        log_json info "Time already synchronized."
+    fi
+else
+    log_json warn "timedatectl not found - skipping time sync check."
+fi
+
+# 2. Virtual environment validation
+if [[ ! -d "${VENV_DIR}" ]]; then
+    log_json error "Virtual environment not found at ${VENV_DIR}"
+    exit 2
+fi
+# Activate venv and verify key packages
+source "${VENV_DIR}/bin/activate"
+# Quick check that critical packages are installed (add/remove as needed)
+for pkg in ib_insync pandas numpy uvicorn fastapi; do
+    if ! python -c "import $pkg" 2>/dev/null; then
+        log_json error "Required package '${pkg}' missing in venv. Run: pip install ${pkg}"
+        deactivate
+        exit 2
+    fi
+done
+log_json info "Virtual environment activated and validated."
+
+# 3. IBKR Gateway availability with retry logic
+log_json info "Waiting for IBKR Gateway on port ${IB_PORT}..."
+for attempt in $(seq 1 "${MAX_INIT_RETRIES}"); do
+    if wait_for_port "${IB_PORT}" 10; then
+        log_json info "IBKR Gateway is reachable on port ${IB_PORT}."
+        break
+    else
+        log_json warn "IBKR Gateway not reachable (attempt ${attempt}/${MAX_INIT_RETRIES})."
+        if (( attempt == MAX_INIT_RETRIES )); then
+            log_json error "IBKR Gateway unavailable after ${MAX_INIT_RETRIES} attempts. Is the gateway running?"
+            # Optionally try to start the systemd service (if configured)
+            if check_command systemctl && systemctl is-active --quiet ibgateway.service 2>/dev/null; then
+                log_json info "Attempting to restart ibgateway.service..."
+                sudo systemctl restart ibgateway.service
+                sleep 10
+                if wait_for_port "${IB_PORT}" 15; then
+                    log_json info "IBKR Gateway restarted and reachable."
+                    break
+                fi
+            fi
+            log_json error "Giving up on IBKR Gateway. Exiting."
+            exit 1
+        fi
+        # Exponential backoff with jitter
+        sleep $(( RETRY_BASE_DELAY * (2 ** (attempt-1)) + RANDOM % 3 ))
+    fi
+done
+
+# 4. Clear any existing health endpoint processes to avoid address already in use
+if command -v fuser >/dev/null 2>&1; then
+    log_json info "Clearing any existing processes on health endpoint port 8001..."
+    fuser -k 8001/tcp 2>/dev/null || true
+    sleep 2
+fi
+
+# ---- Launch bot with supervision --------------------------------------
+cd "${PROJECT_DIR}"
+LOG_FILE="${LOG_DIR}/engine_$(date +%Y%m%d_%H%M%S).log"
+mkdir -p "${LOG_DIR}"
+
+log_json info "Launching Trading Engine (logging to ${LOG_FILE})"
+# Start engine in background with proper Python path
+export PYTHONPATH="${PROJECT_DIR}:${PYTHONPATH:-}"
+"${VENV_DIR}/bin/python" live/engine.py >> "${LOG_FILE}" 2>&1 &
+ENGINE_PID=$!
+log_json info "Engine started with PID ${ENGINE_PID}"
+
+# Give the engine a moment to start up
+sleep 3
+
+# Optional: Verify bot health endpoint (non-critical - don't fail if not available)
+if [[ -n "${HEALTH_CHECK_URL}" ]]; then
+    log_json info "Checking bot health endpoint (non-critical)..."
+    HEALTH_READY=0
+    for attempt in $(seq 1 10); do
+        if curl -fsS "${HEALTH_CHECK_URL}" >/dev/null 2>&1; then
+            log_json info "Health endpoint responding."
+            HEALTH_READY=1
+            break
+        else
+            log_json warn "Health endpoint not ready yet (attempt ${attempt}/10)."
+            sleep 3
+        fi
+    done
+    if [[ ${HEALTH_READY} -eq 1 ]]; then
+        log_json info "Health endpoint verification successful."
+    else
+        log_json warn "Health endpoint not responding - bot may still be trading normally."
+        log_json warn "You can check the dashboard at http://localhost:8000/dashboard if available"
+    fi
+else
+    log_json info "No health endpoint configured, skipping verification."
+fi
+
+# Wait for engine process to exit
+wait "${ENGINE_PID}"
+EXIT_CODE=$?
+log_json info "Engine exited with code ${EXIT_CODE}."
+
+# Determine if we should restart based on exit code
+case "${EXIT_CODE}" in
+    0)  # Clean shutdown
+        log_json info "Engine shut down cleanly. No restart."
+        exit 0
+        ;;
+    1|130|143)  # Generic error, interrupt, or SIGTERM
+        log_json warn "Engine stopped unexpectedly (exit ${EXIT_CODE}). Will restart in 15s."
+        sleep 15
+        exec "$0"  # Restart ourselves (execl loop)
+        ;;
+    *)  # Any other code - treat as fatal
+        log_json error "Engine exited with unexpected code ${EXIT_CODE}. Investigating..."
+        # Send alert via your existing alerters (Discord/Email/etc.)
+        # Example: python -c "from monitoring.discord_alerter import send_alert; send_alert('Fatal engine exit')"
+        exit 2
+        ;;
+esac

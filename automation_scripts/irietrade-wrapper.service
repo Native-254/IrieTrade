@@ -1,0 +1,15 @@
+# Store this file at: ~/.config/systemd/user/irietrade-wrapper.service
+[Unit]
+Description=IrieTrade Trading Bot (Wrapper)
+After=network-online.target
+
+[Service]
+Type=simple
+ExecStart=%h/.local/bin/irietrade-wrapper.sh
+StandardOutput=journal
+StandardError=journal
+Restart=on-failure
+RestartSec=10
+
+[Install]
+WantedBy=default.target

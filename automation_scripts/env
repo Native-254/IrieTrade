@@ -1,0 +1,18 @@
+# Store this file at: ~/.config/irietrade/env
+# IrieTrade environment variables
+# Keep this file private: chmod 600
+
+# IBKR credentials (only needed if using IBKR Web API; leave blank if using saved session/jts.ini)
+IBKR_USERNAME="your_ibkr_username_here"
+IBKR_PASSWORD="your_ibkr_password_here"
+
+# Alerting - Discord webhook (optional)
+DISCORD_WEBHOOK_URL="https://discord.com/api/webhooks/your/webhook/id"
+
+# Alerting - Email (optional) - you can use SMTP variables or leave empty
+ALERT_EMAIL="your_email@example.com"
+
+# Any other secrets your strategies need (API keys for crypto exchanges, etc.)
+# Example:
+# BINANCE_API_KEY="your_binance_key"
+# BINANCE_API_SECRET="your_binance_secret"
