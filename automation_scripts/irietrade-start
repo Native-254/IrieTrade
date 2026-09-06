@@ -127,8 +127,8 @@ fi
 
 # ---- Launch bot with supervision --------------------------------------
 cd "${PROJECT_DIR}"
-LOG_FILE="${LOG_DIR}/engine_$(date +%Y%m%d_%H%M%S).log"
 mkdir -p "${LOG_DIR}"
+LOG_FILE="${LOG_DIR}/engine_$(date +%Y%m%d).log"
 
 log_json info "Launching Trading Engine (logging to ${LOG_FILE})"
 # Start engine in background with proper Python path
