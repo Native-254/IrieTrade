@@ -1,0 +1,26 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1680" height="410" viewBox="0 0 1680 410" role="img" aria-labelledby="title desc">
+  <title id="title">IrieTrade terminal activity</title>
+  <desc id="desc">Dark terminal showing IrieTrade trading engine updates, resolved signals, email alerts, and minimum-notional warnings.</desc>
+  <rect width="1680" height="410" fill="#170817"/>
+  <style>
+    .line { font: 16px monospace; white-space: pre; }
+    .time { fill: #20d9bd; }
+    .info { fill: #f2f2f2; font-weight: 700; }
+    .warn { fill: #c08a3e; font-weight: 700; }
+    .message { fill: #f2f2f2; font-weight: 700; }
+  </style>
+  <text x="12" y="30" class="line"><tspan class="time">2026-09-07 23:01:33</tspan><tspan class="info"> | INFO    | __main__:run_iteration:973 - Updated trailing stop for ZEC/USDT (kucoin): 1140.16</tspan></text>
+  <text x="12" y="57" class="line"><tspan class="time">2026-09-07 23:01:33</tspan><tspan class="warn"> | WARNING | __main__:run_iteration:981 - No stop order ID for ZEC/USDT (kucoin).</tspan></text>
+  <text x="12" y="84" class="line"><tspan class="time">2026-09-07 23:01:33</tspan><tspan class="info"> | INFO    | __main__:run_iteration:973 - Updated trailing stop for DOT/USDT (kucoin): 1.04</tspan></text>
+  <text x="12" y="111" class="line"><tspan class="time">2026-09-07 23:01:34</tspan><tspan class="warn"> | WARNING | __main__:run_iteration:981 - No stop order ID for DOT/USDT (kucoin).</tspan></text>
+  <text x="12" y="138" class="line"><tspan class="time">2026-09-07 23:01:34</tspan><tspan class="info"> | INFO    | __main__:run_iteration:973 - Updated trailing stop for NEAR/USDT (kucoin): 2.27</tspan></text>
+  <text x="12" y="165" class="line"><tspan class="time">2026-09-07 23:01:34</tspan><tspan class="info"> | INFO    | __main__:run_iteration:973 - Updated trailing stop for FB/USDT (kucoin): 0.34</tspan></text>
+  <text x="12" y="192" class="line"><tspan class="time">2026-09-07 23:01:34</tspan><tspan class="warn"> | WARNING | __main__:run_iteration:981 - No stop order ID for FB/USDT (kucoin).</tspan></text>
+  <text x="12" y="219" class="line"><tspan class="time">2026-09-07 23:01:35</tspan><tspan class="info"> | INFO    | __main__:run_iteration:1108 - Resolved PEPE/USDT (kucoin): ['EXIT_SHORT', 'EXIT_LONG'] -&gt; SELL (current_side=BUY)</tspan></text>
+  <text x="12" y="246" class="line"><tspan class="time">2026-09-07 23:01:35</tspan><tspan class="warn"> | WARNING | __main__:place_trade:625 - Skipping exit for PEPE/USDT: notional 0.00005445 is below broker minimum 0.10000000; removed dust position.</tspan></text>
+  <text x="12" y="273" class="line"><tspan class="time">2026-09-07 23:01:40</tspan><tspan class="info"> | INFO    | __main__:run_iteration:1108 - Resolved SUI/USDT (kucoin): ['EXIT_SHORT', 'ENTER_SHORT'] -&gt; SELL (current_side=None)</tspan></text>
+  <text x="12" y="300" class="line"><tspan class="time">2026-09-07 23:01:40</tspan><tspan class="info"> | INFO    | __main__:run_iteration:1187 - Scaling SUI/USDT quantity 18 -&gt; 5.011984545737304 to fit limits (proposed=14.96, budget=4.16)</tspan></text>
+  <text x="12" y="327" class="line"><tspan class="time">2026-09-07 23:01:40</tspan><tspan class="info"> | INFO    | risk.manager:validate_order:65 - Order for SUI/USDT quantity 5.011984545737304 shares.</tspan></text>
+  <text x="12" y="354" class="line"><tspan class="time">2026-09-07 23:01:41</tspan><tspan class="info"> | INFO    | monitoring.email_alerter:_send_with_thread:54 - Email sent: IrieTrade Error [KuCoin]</tspan></text>
+  <text x="12" y="381" class="line"><tspan class="time">2026-09-07 23:01:42</tspan><tspan class="info"> | INFO    | __main__:run_iteration:1108 - Resolved DOT/USDT (kucoin): ['EXIT_LONG'] -&gt; SELL (current_side=BUY)</tspan></text>
+</svg>

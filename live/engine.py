@@ -1349,7 +1349,12 @@ class TradingEngine:
         if self.scanner_enabled and self.scanner:
             scan_time = self.config["scanner"].get("time", "08:00")
             schedule.every().day.at(scan_time).do(self._run_stock_scanner)
-            schedule.every().day.at(scan_time).do(self._run_crypto_scanner)
+            for broker_name in self.risk_managers:
+                if self._is_crypto_broker(broker_name):
+                    schedule.every().day.at(scan_time).do(
+                        self._run_crypto_scanner_for_broker,
+                        broker_name=broker_name,
+                    )
             schedule.every().day.at(scan_time).do(self._run_clone_monitor)
             schedule.every().day.at(scan_time).do(self._run_trending_scanner)
 
@@ -1396,17 +1401,30 @@ class TradingEngine:
         else:
             log.warning("Stock scanner returned no symbols; IBKR watchlist unchanged.")
 
-    def _run_crypto_scanner(self):
-        """Update KuCoin symbols with fresh crypto candidates."""
+    @staticmethod
+    def _is_crypto_broker(broker_name: str) -> bool:
+        """Return True for broker names that should use crypto scanning."""
+        return broker_name not in {"ib", "nse"}
+
+    def _run_crypto_scanner_for_broker(self, broker_name: str):
+        """Update a specific crypto broker's symbol list with fresh candidates."""
         if self.scanner is None:
             return
-        log.info("Running crypto scanner for KuCoin...")
-        new_pairs = self.scanner.scan_crypto(exchange_name="kucoin")
+        log.info(f"Running crypto scanner for {broker_name}...")
+        new_pairs = self.scanner.scan_crypto(exchange_name=broker_name)
         if new_pairs:
-            self.symbols_by_broker["kucoin"] = new_pairs
-            log.success(f"KuCoin symbols updated: {', '.join(new_pairs[:10])}...")
+            self.symbols_by_broker[broker_name] = new_pairs
+            log.success(f"{broker_name} symbols updated: {', '.join(new_pairs[:5])}...")
         else:
-            log.warning("Crypto scanner returned no symbols; KuCoin watchlist unchanged.")
+            log.warning(
+                f"Crypto scanner returned no symbols for {broker_name}; watchlist unchanged."
+            )
+
+    def _run_crypto_scanner(self):
+        """Update all crypto broker symbols with fresh candidates."""
+        for broker_name in list(self.risk_managers):
+            if self._is_crypto_broker(broker_name):
+                self._run_crypto_scanner_for_broker(broker_name)
 
     def _run_clone_monitor(self):
         """Run the repo clone monitor script."""

@@ -206,8 +206,16 @@ class MarketScanner:
             if vol * price >= min_volume_usdt
         ]
 
-        filtered.sort(key=lambda x: (x[1] * x[2], abs(x[3])), reverse=True)
+        def momentum_score(item: tuple[str, float, float, float]) -> float:
+            _, vol, price, change = item
+            dollar_volume = vol * price
+            normalized_volume = dollar_volume / max(min_volume_usdt, 1.0)
+            return (abs(change) * 2.0) + (normalized_volume * 0.35)
+
+        filtered.sort(key=momentum_score, reverse=True)
 
         top_symbols = [sym for sym, _, _, _ in filtered[: self.top_n]]
-        log.info(f"Crypto scanner found {len(top_symbols)} pairs: {', '.join(top_symbols[:5])}...")
+        log.info(
+            f"Crypto scanner found {len(top_symbols)} pairs: {', '.join(top_symbols[:5])}..."
+        )
         return top_symbols

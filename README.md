@@ -22,6 +22,7 @@ A fully automated, risk‑managed trading bot for the **NYSE** (via Interactive 
 - **Position-aware signal resolver** – merges signals from all active strategies and resolves conflicts based on your current position, preventing accidental naked short selling and handling reversals safely.
 - **Long/Short capability** – enters both long and short positions with hard bracket stops (IBKR) or market orders (crypto). Short selling is automatically disabled on cash accounts and on crypto exchanges that don't support it.
 - **Multi-platform trading** – supports Interactive Brokers (IBKR), Binance, OKX, Coinbase, Kraken, KuCoin, and a ready-to-use stub for the Nairobi Securities Exchange (NSE).
+- **Broker-aware crypto scanning** – automatically refreshes watchlists for each crypto broker (Binance, OKX, Coinbase, Kraken, KuCoin), ranking pairs by momentum and dollar-volume so each exchange picks high-potential coins rather than only a static list.
 - **Full risk management** – ATR‑based stops, Kelly‑dynamic position sizing, max portfolio heat, gross/net exposure limits, daily loss limits, drawdown protection, single‑name limits, and an earnings blackout filter. Risk limits can be configured **per broker** (e.g., looser limits for a small crypto account, tight limits for a large equity account).
 - **Trailing stops & partial exits** – automatically tightens stop orders and scales out of positions on exit signals.
 - **Hybrid data pipeline** – Yahoo Finance for US stocks; ccxt (direct exchange API) for crypto pairs, both with local Parquet caching.
@@ -181,7 +182,27 @@ python live/engine.py
 
 Watch the terminal logs and your Discord/Telegram for trade alerts.
 
+> Logs are displayed in the terminal in real time and are also written to `logs/bot_YYYY-MM-DD.log` for later review. This makes it easy to debug issues while still keeping a rolling record of bot activity.
+
 > Note: By default, the bot runs the main iteration every hour at :01 (1 minute after the hour). To change the schedule, edit `live/engine.py` (look for `schedule.every`).
+
+## 📸 Screenshots
+
+### Portfolio overview dashboard
+
+![Portfolio overview](https://github.com/user-attachments/assets/8190264a-85b9-47dd-a0d5-f8f92d7347b9)
+
+This dashboard gives a live view of portfolio value, daily P&L, unrealised P&L, open positions, and the equity curve. It is designed to be monitored alongside the terminal logs while the engine is running.
+
+> Dashboard note: if the IBKR TWS/Gateway connection is interrupted or the IBKR account is temporarily removed from the dashboard feed, the portfolio view can appear to dip even though the bot is still operating normally. In those cases, the drop is typically a feed/disconnect state rather than a real loss.
+
+### Terminal activity
+
+![Terminal activity](docs/screenshots/terminal-activity.svg)
+
+The bot also prints live operational updates in the terminal, including signal generation, stop updates, exit resolution, and warnings from the risk engine. These logs are a primary troubleshooting tool and are also written to `logs/bot_YYYY-MM-DD.log` for review after the fact.
+
+The terminal output includes events such as trailing-stop updates, resolved entry and exit signals, broker validation, email alerts, and warnings when an order is below an exchange's minimum notional. A warning that a small dust position was skipped does not necessarily indicate a strategy failure; it means the broker rejected an order that was too small to execute.
 
 ## 📈 Real-Time Dashboard
 

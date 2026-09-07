@@ -43,30 +43,72 @@ class KrakenBroker(Broker):
     def disconnect(self):
         self.connected = False
 
+    def _fetch_balance_with_retry(
+        self, retries: int = 2, delay: float = 3.0
+    ) -> dict:
+        """Fetch Kraken balance with retry on transient errors."""
+        assert self.exchange is not None
+        last_error: Exception | None = None
+        for attempt in range(retries + 1):
+            try:
+                return self.exchange.fetch_balance()
+            except Exception as e:  # noqa: BLE001
+                last_error = e
+                if attempt < retries:
+                    log.warning(
+                        f"Kraken fetch_balance failed ({e}), retrying in {delay}s..."
+                    )
+                    time.sleep(delay)
+        if last_error is not None:
+            raise last_error
+        raise RuntimeError("Kraken fetch_balance failed without exception")
+
     def get_account_info(self) -> dict[str, object]:
         if not self.connected:
             self.connect()
         assert self.exchange is not None
-        balance = self.exchange.fetch_balance()
+
+        try:
+            balance = self._fetch_balance_with_retry()
+        except Exception as e:  # noqa: BLE001
+            log.error(f"Could not fetch Kraken balance after retries: {e}")
+            raise
+
         total = balance.get("total", {})
         usd_value = 0.0
+
+        try:
+            tickers = self.exchange.fetch_tickers()
+        except Exception as e:  # noqa: BLE001
+            log.warning(
+                f"Could not fetch tickers in batch: {e}; falling back to per-asset"
+            )
+            tickers = None
+
         for asset, amount in total.items():
             amt = float(str(amount)) if amount else 0.0
             if amt == 0.0:
                 continue
             if asset in ("USD", "USDT", "USDC"):
                 usd_value += amt
+                continue
+
+            symbol = f"{asset}/USDT"
+            last_price = 0.0
+            if tickers is not None:
+                ticker = tickers.get(symbol)
+                if ticker and ticker.get("last") is not None:
+                    last_price = float(str(ticker["last"]))
             else:
-                for quote in ("USD", "USDT"):
-                    try:
-                        ticker = self.exchange.fetch_ticker(f"{asset}/{quote}")
-                        last_price = (
-                            float(str(ticker["last"])) if ticker.get("last") else 0.0
-                        )
-                        usd_value += amt * last_price
-                        break
-                    except Exception:  # noqa: BLE001, S112
-                        continue
+                try:
+                    ticker = self.exchange.fetch_ticker(symbol)
+                    last_price = float(str(ticker["last"]))
+                except Exception:  # noqa: BLE001, S110
+                    pass
+
+            if last_price > 0:
+                usd_value += amt * last_price
+
         return {
             "net_liquidation": usd_value,
             "account": "Kraken",
@@ -98,6 +140,14 @@ class KrakenBroker(Broker):
             "filled_quantity": order["filled"],
             "avg_price": order["average"],
         }
+
+    def get_min_order_notional(self, symbol: str) -> float:
+        if not self.connected:
+            self.connect()
+        assert self.exchange is not None
+        market = self.exchange.market(symbol)
+        min_cost = market.get("limits", {}).get("cost", {}).get("min")
+        return float(str(min_cost)) if min_cost else 0.0
 
     def place_bracket_long(
         self,
@@ -140,19 +190,28 @@ class KrakenBroker(Broker):
         if not self.connected:
             self.connect()
         assert self.exchange is not None
-        balance = self.exchange.fetch_balance()
+
+        balance = self._fetch_balance_with_retry()
         positions = []
+        stablecoins = {"USDT", "USDC", "USD", "TUSD", "BUSD", "DAI", "USDP", "GUSD"}
+
+        markets = getattr(self.exchange, "markets", None) or {}
+
         for asset, amount in balance["total"].items():
             amt = float(str(amount)) if amount else 0.0
-            if amt > 0.0:
-                positions.append(
-                    {
-                        "symbol": asset,
-                        "quantity": amt,
-                        "avg_cost": 0.0,
-                        "market_value": 0.0,
-                    }
-                )
+            if amt <= 0.0 or asset in stablecoins:
+                continue
+            symbol = f"{asset}/USDT"
+            if symbol not in markets:
+                continue
+            positions.append(
+                {
+                    "symbol": symbol,
+                    "quantity": amt,
+                    "avg_cost": 0.0,
+                    "market_value": 0.0,
+                }
+            )
         return positions
 
     def is_shortable(self, symbol: str, quantity: float) -> bool:
