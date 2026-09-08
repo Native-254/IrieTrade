@@ -26,6 +26,11 @@ class _RequestStub:
         }
 
 
+class _AssistantRequestStub:
+    async def json(self):
+        return {"question": "What is happening?"}
+
+
 def test_webhook_exception_response_does_not_expose_details(monkeypatch):
     monkeypatch.setattr(api_module, "trading_engine", _EngineStub())
 
@@ -33,3 +38,12 @@ def test_webhook_exception_response_does_not_expose_details(monkeypatch):
 
     assert response == {"error": "Internal webhook processing error"}
     assert "secret broker stack detail" not in str(response)
+
+
+def test_assistant_requires_server_configuration(monkeypatch):
+    monkeypatch.setattr(api_module, "trading_engine", None)
+    monkeypatch.delenv("AI_API_KEY", raising=False)
+
+    response = asyncio.run(api_module.api_assistant(_AssistantRequestStub()))
+
+    assert response["error"].startswith("AI assistant is not configured")

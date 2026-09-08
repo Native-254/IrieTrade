@@ -1,6 +1,12 @@
 # monitoring/api.py
+import asyncio
+import json
+import os
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
+from urllib.error import HTTPError, URLError
+from urllib.request import Request as UrlRequest
+from urllib.request import urlopen
 
 import pandas as pd
 import plotly.graph_objects as go
@@ -23,6 +29,67 @@ from utils.security import encrypt
 app = FastAPI()
 
 trading_engine = None
+
+
+def _post_ai_request(api_url: str, api_key: str, payload: dict) -> dict:
+    request = UrlRequest(
+        api_url,
+        data=json.dumps(payload).encode("utf-8"),
+        headers={
+            "Authorization": f"Bearer {api_key}",
+            "Content-Type": "application/json",
+        },
+        method="POST",
+    )
+    with urlopen(request, timeout=20) as response:
+        return json.loads(response.read().decode("utf-8"))
+
+
+def _dashboard_snapshot() -> dict:
+    if not trading_engine:
+        return {"error": "Engine not running"}
+
+    positions = {}
+    for position_manager in trading_engine.position_managers.values():
+        positions.update(position_manager.positions)
+    nav = sum(rm.current_capital for rm in trading_engine.risk_managers.values())
+    daily_pnl = sum(rm.daily_pnl for rm in trading_engine.risk_managers.values())
+    open_risk = sum(rm.open_risk for rm in trading_engine.risk_managers.values())
+    latest_prices = {}
+    for broker_prices in trading_engine.broker_latest_prices.values():
+        latest_prices.update(broker_prices)
+
+    unrealized_pnl = 0.0
+    position_summary = []
+    for position in positions.values():
+        current_price = latest_prices.get(position.symbol, position.entry_price)
+        pnl = (
+            (current_price - position.entry_price) * position.quantity
+            if position.side == "BUY"
+            else (position.entry_price - current_price) * position.quantity
+        )
+        unrealized_pnl += pnl
+        position_summary.append(
+            {
+                "symbol": position.symbol,
+                "side": position.side,
+                "quantity": position.quantity,
+                "entry_price": position.entry_price,
+                "current_price": current_price,
+                "unrealized_pnl": pnl,
+            }
+        )
+
+    return {
+        "status": "running" if trading_engine.is_running else "stopped",
+        "nav": nav,
+        "daily_pnl": daily_pnl,
+        "unrealized_pnl": unrealized_pnl,
+        "open_risk": open_risk,
+        "open_positions": len(positions),
+        "recent_trades": trading_engine.trade_results[-10:],
+        "positions": position_summary,
+    }
 
 
 def _is_configured() -> bool:
@@ -118,6 +185,50 @@ async def api_first_run():
     if trading_engine:
         return {"first_run": trading_engine.first_run}
     return {"first_run": False}
+
+
+@app.post("/api/assistant")
+async def api_assistant(request: Request):
+    data = await request.json()
+    question = str(data.get("question", "")).strip()
+    if not question:
+        return {"error": "Enter a question first."}
+
+    api_key = os.getenv("AI_API_KEY")
+    if not api_key:
+        return {
+            "error": "AI assistant is not configured. Set AI_API_KEY, AI_API_URL, and AI_MODEL in .env."
+        }
+
+    snapshot = _dashboard_snapshot()
+    api_url = os.getenv("AI_API_URL", "https://api.openai.com/v1/chat/completions")
+    model = os.getenv("AI_MODEL", "gpt-4o-mini")
+    payload = {
+        "model": model,
+        "temperature": 0.2,
+        "messages": [
+            {
+                "role": "system",
+                "content": (
+                    "You are the IrieTrade dashboard assistant. Explain the current "
+                    "portfolio snapshot clearly and conservatively. Do not invent data, "
+                    "recommend trades, or claim to have placed orders. Mention when data "
+                    "is missing or stale. Keep answers under 180 words."
+                ),
+            },
+            {
+                "role": "user",
+                "content": f"Question: {question}\nDashboard snapshot:\n{json.dumps(snapshot, default=str)}",
+            },
+        ],
+    }
+    try:
+        result = await asyncio.to_thread(_post_ai_request, api_url, api_key, payload)
+        answer = result["choices"][0]["message"]["content"].strip()
+        return {"answer": answer, "model": model}
+    except (HTTPError, URLError, TimeoutError, KeyError, IndexError, json.JSONDecodeError) as exc:
+        log.warning(f"Dashboard assistant request failed: {exc}")
+        return {"error": "The AI assistant could not respond right now."}
 
 
 @app.get("/api/positions")
@@ -396,7 +507,7 @@ async def dashboard():
             .nav-item.active, .nav-item:hover {{ background: var(--surface-muted); color: var(--text); }}
             .sidebar-footer {{ margin-top: auto; padding: 16px 12px 0; border-top: 1px solid var(--border); color: var(--muted); font-size: 11px; line-height: 1.5; }}
             .nav-collapsed .brand {{ padding-left: 4px; padding-right: 4px; }}
-            .nav-collapsed .brand-title, .nav-collapsed .brand-toggle, .nav-collapsed .nav-label, .nav-collapsed .nav-item span, .nav-collapsed .sidebar-footer {{ display: none; }}
+            .nav-collapsed .brand-title, .nav-collapsed .nav-label, .nav-collapsed .nav-item span, .nav-collapsed .sidebar-footer {{ display: none; }}
             .nav-collapsed .brand {{ justify-content: center; }}
             .nav-collapsed .nav-item {{ justify-content: center; padding: 0; }}
             main {{ min-width: 0; }}
@@ -447,9 +558,14 @@ async def dashboard():
             .dialog-header h2 {{ margin: 0; font-size: 18px; }}
             .dialog-close {{ border: 0; background: transparent; color: var(--muted); cursor: pointer; font-size: 20px; line-height: 1; }}
             .dialog-copy {{ margin: 18px 0 0; color: var(--muted); font-size: 13px; line-height: 1.6; }}
+            .assistant-bar {{ display: flex; gap: 8px; align-items: center; margin: 0 0 20px; padding: 8px; border: 1px solid var(--border); border-radius: 12px; background: var(--surface); box-shadow: var(--shadow); }}
+            .assistant-bar input {{ flex: 1; min-width: 0; border: 0; outline: 0; background: transparent; color: var(--text); font: inherit; font-size: 13px; padding: 8px 10px; }}
+            .assistant-bar button {{ min-height: 34px; padding: 0 14px; border: 0; border-radius: 8px; background: var(--accent); color: var(--surface); cursor: pointer; font: inherit; font-size: 12px; font-weight: 700; }}
+            .assistant-bar button:disabled {{ opacity: 0.55; cursor: wait; }}
+            .assistant-answer {{ margin: -8px 0 20px; padding: 12px 14px; border: 1px solid var(--border); border-radius: 10px; color: var(--muted); background: var(--surface-muted); font-size: 13px; line-height: 1.5; white-space: pre-wrap; }}
             .footer {{ margin-top: 26px; text-align: center; color: var(--muted); font-size: 11px; }}
             @media (max-width: 1180px) {{ .layout {{ grid-template-columns: 190px minmax(0, 1fr); padding: 22px; gap: 20px; }} .stat-grid {{ grid-template-columns: repeat(2, minmax(0, 1fr)); }} .asset-grid {{ grid-template-columns: repeat(2, minmax(0, 1fr)); }} }}
-            @media (max-width: 760px) {{ .layout, .layout.nav-collapsed {{ display: block; padding: 14px; }} .sidebar {{ position: static; height: auto; margin-bottom: 18px; padding: 14px; }} .brand, .nav-collapsed .brand {{ padding: 4px 8px 16px; justify-content: flex-start; }} .brand-title, .nav-collapsed .brand-title, .brand-toggle, .nav-collapsed .brand-toggle, .nav-label, .sidebar-footer {{ display: none; }} .sidebar nav, .nav-collapsed .sidebar nav {{ display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 4px; }} .nav-item, .nav-collapsed .nav-item {{ justify-content: center; padding: 0 6px; text-align: center; font-size: 11px; }} .nav-item span, .nav-collapsed .nav-item span {{ display: inline; }} .topbar {{ align-items: flex-start; margin-bottom: 18px; }} .topbar h2 {{ font-size: 20px; }} .panel {{ padding: 18px; border-radius: 13px; }} .panel-header {{ flex-direction: column; }} .stat-grid, .asset-grid {{ grid-template-columns: 1fr 1fr; }} .stat-card {{ padding: 14px; }} .stat-value {{ font-size: 20px; }} .chart-card {{ min-height: 320px; overflow: hidden; }} }}
+            @media (max-width: 760px) {{ .layout, .layout.nav-collapsed {{ display: block; padding: 14px; }} .sidebar {{ position: static; height: auto; margin-bottom: 18px; padding: 14px; }} .brand, .nav-collapsed .brand {{ padding: 4px 8px 16px; justify-content: flex-start; }} .brand-title, .nav-collapsed .brand-title, .brand-toggle, .nav-collapsed .brand-toggle, .nav-label, .sidebar-footer {{ display: none; }} .sidebar nav, .nav-collapsed .sidebar nav {{ display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 4px; }} .nav-item, .nav-collapsed .nav-item {{ justify-content: center; padding: 0 6px; text-align: center; font-size: 11px; }} .nav-item span, .nav-collapsed .nav-item span {{ display: inline; }} .topbar {{ align-items: flex-start; margin-bottom: 18px; }} .topbar h2 {{ font-size: 20px; }} .panel {{ padding: 18px; border-radius: 13px; }} .panel-header {{ flex-direction: column; }} .stat-grid, .asset-grid {{ grid-template-columns: 1fr 1fr; }} .stat-card {{ padding: 14px; }} .stat-value {{ font-size: 20px; }} .chart-card {{ min-height: 320px; overflow: hidden; }} .assistant-bar {{ margin-bottom: 16px; }} }}
             @media (max-width: 420px) {{ .stat-grid, .asset-grid {{ grid-template-columns: 1fr; }} .topbar-actions {{ flex-direction: column; align-items: flex-end; }} .theme-toggle {{ min-height: 36px; }} }}
             @media (prefers-reduced-motion: reduce) {{ *, *::before, *::after {{ scroll-behavior: auto !important; transition-duration: 0.01ms !important; }} }}
         </style>
@@ -472,7 +588,7 @@ async def dashboard():
                 <nav aria-label="Dashboard navigation">
                     <a class="nav-item active" href="#overview"><svg viewBox="0 0 24 24" fill="none" aria-hidden="true"><rect x="4" y="4" width="6" height="6" rx="1" stroke="currentColor" stroke-width="1.8"/><rect x="14" y="4" width="6" height="6" rx="1" stroke="currentColor" stroke-width="1.8"/><rect x="4" y="14" width="6" height="6" rx="1" stroke="currentColor" stroke-width="1.8"/><rect x="14" y="14" width="6" height="6" rx="1" stroke="currentColor" stroke-width="1.8"/></svg><span>Overview</span></a>
                     <a class="nav-item" href="#positions"><svg viewBox="0 0 24 24" fill="none" aria-hidden="true"><path d="M5 19V9m7 10V5m7 14v-7" stroke="currentColor" stroke-linecap="round" stroke-width="1.8"/></svg><span>Portfolio</span></a>
-                    <a class="nav-item" href="#alerts"><svg viewBox="0 0 24 24" fill="none" aria-hidden="true"><path d="M18 9a6 6 0 0 0-12 0c0 7-3 7-3 9h18c0-2-3-2-3-9ZM10 21h4" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="1.8"/></svg><span>Alerts</span></a>
+                    <a class="nav-item" href="#alerts"><svg viewBox="0 0 24 24" fill="none" aria-hidden="true"><path d="M6 4h9l3 3v13a1 1 0 0 1-1 1H6a1 1 0 0 1-1-1V5a1 1 0 0 1 1-1Z" stroke="currentColor" stroke-linejoin="round" stroke-width="1.8"/><path d="M8 10h8M8 14h8M8 18h5" stroke="currentColor" stroke-linecap="round" stroke-width="1.6"/></svg><span>Ledger</span></a>
                     <a class="nav-item" href="/setup"><svg viewBox="0 0 24 24" fill="none" aria-hidden="true"><path d="M12 15.5a3.5 3.5 0 1 0 0-7 3.5 3.5 0 0 0 0 7Z" stroke="currentColor" stroke-width="1.8"/><path d="m19.4 15 .1.1a2 2 0 0 1-2.8 2.8l-.1-.1a2 2 0 0 0-3.4 1.4v.2a2 2 0 0 1-4 0v-.2A2 2 0 0 0 5.8 17.8l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1A2 2 0 0 0 1.6 11.6h-.2a2 2 0 0 1 0-4h.2A2 2 0 0 0 3 4.2l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1A2 2 0 0 0 9.2 0h.2a2 2 0 0 1 4 0v.2A2 2 0 0 0 16.8 1.4l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a2 2 0 0 0 1.4 3.4h.2a2 2 0 0 1 0 4H21a2 2 0 0 0-1.6 3.4Z" transform="scale(.72) translate(4.5 4.5)" stroke="currentColor" stroke-width="1.8"/></svg><span>Settings</span></a>
                 </nav>
                 <div class="sidebar-footer">Read-only dashboard<br>Updates every hour</div>
@@ -491,6 +607,11 @@ async def dashboard():
                         <button class="theme-toggle" id="theme-toggle" type="button" aria-label="Switch color theme">Dark mode</button>
                     </div>
                 </header>
+                <form class="assistant-bar" id="assistant-form">
+                    <input id="assistant-question" type="text" placeholder="Ask about the current portfolio" aria-label="Ask the dashboard assistant">
+                    <button type="submit" id="assistant-submit">Ask assistant</button>
+                </form>
+                <div class="assistant-answer" id="assistant-answer" hidden></div>
                 <section id="overview" class="panel">
                     <div class="panel-header">
                         <div>
@@ -690,6 +811,32 @@ async def dashboard():
             window.location.reload();
         }});
 
+        const assistantForm = document.getElementById('assistant-form');
+        const assistantQuestion = document.getElementById('assistant-question');
+        const assistantSubmit = document.getElementById('assistant-submit');
+        const assistantAnswer = document.getElementById('assistant-answer');
+        assistantForm.addEventListener('submit', async (event) => {{
+            event.preventDefault();
+            const question = assistantQuestion.value.trim();
+            if (!question) return;
+            assistantSubmit.disabled = true;
+            assistantAnswer.hidden = false;
+            assistantAnswer.textContent = 'Reviewing the current dashboard snapshot...';
+            try {{
+                const response = await fetch('/api/assistant', {{
+                    method: 'POST',
+                    headers: {{ 'Content-Type': 'application/json' }},
+                    body: JSON.stringify({{ question }})
+                }});
+                const result = await response.json();
+                assistantAnswer.textContent = result.answer || result.error || 'No assistant response.';
+            }} catch (error) {{
+                assistantAnswer.textContent = 'The assistant request failed. Check the API configuration and try again.';
+            }} finally {{
+                assistantSubmit.disabled = false;
+            }}
+        }});
+
         const chart = document.querySelector('.js-plotly-plot');
         document.querySelectorAll('.range-button').forEach((button) => {{
             button.addEventListener('click', () => {{
@@ -700,7 +847,8 @@ async def dashboard():
                     Plotly.relayout(chart, {{'xaxis.autorange': true}});
                     return;
                 }}
-                const end = new Date();
+                const chartEnd = chart.data?.[0]?.x?.at(-1);
+                const end = chartEnd ? new Date(chartEnd) : new Date();
                 const start = new Date(end);
                 start.setDate(end.getDate() - Number(button.dataset.range));
                 Plotly.relayout(chart, {{'xaxis.autorange': false, 'xaxis.range': [start, end]}});

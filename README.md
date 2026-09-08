@@ -162,6 +162,16 @@ echo "EMAIL_PASSWORD=your-16-char-app-password" >> .env
 # Add any crypto exchange keys as needed (see docs)
 ```
 
+Optional dashboard assistant configuration (OpenAI-compatible API):
+
+```bash
+AI_API_KEY=your-ai-api-key
+AI_API_URL=https://api.openai.com/v1/chat/completions
+AI_MODEL=gpt-4o-mini
+```
+
+The dashboard assistant sends the current portfolio snapshot to the configured server-side AI provider. The API key is never sent to the browser. Without these variables, the dashboard remains fully usable and the assistant displays a configuration message.
+
 ### Optional: Use the onboarding wizard
 
 Once the bot is running, visit <http://localhost:8000/setup> to configure brokers and symbols through a web UI – no manual YAML editing required.
