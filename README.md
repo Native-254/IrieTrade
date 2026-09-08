@@ -183,14 +183,13 @@ python live/engine.py
 Watch the terminal logs and your Discord/Telegram for trade alerts.
 
 > Logs are displayed in the terminal in real time and are also written to `logs/bot_YYYY-MM-DD.log` for later review. This makes it easy to debug issues while still keeping a rolling record of bot activity.
-
 > Note: By default, the bot runs the main iteration every hour at :01 (1 minute after the hour). To change the schedule, edit `live/engine.py` (look for `schedule.every`).
 
 ## 📸 Screenshots
 
 ### Portfolio overview dashboard
 
-![Portfolio overview](https://github.com/user-attachments/assets/8190264a-85b9-47dd-a0d5-f8f92d7347b9)
+![Portfolio overview](docs/screenshots/dashboard-overview.png)
 
 This dashboard gives a live view of portfolio value, daily P&L, unrealised P&L, open positions, and the equity curve. It is designed to be monitored alongside the terminal logs while the engine is running.
 
