@@ -761,7 +761,7 @@ class TradingEngine:
                             "unable to reduce further"
                         )
                         continue
-                        
+
                 side = "SELL" if pos.side == "BUY" else "BUY_TO_COVER"
                 log.warning(
                     f"De-risking {sym}: reducing {reduce_qty:.2f} shares to enforce single-name limit."
@@ -789,15 +789,15 @@ class TradingEngine:
 
                 if not self._is_crypto(sym):
                     reduce_qty = int(reduce_qty)
-                    if reduce_qty <=0:
+                    if reduce_qty <= 0:
                         continue
-                    
+
                 side = "SELL" if pos.side == "BUY" else "BUY_TO_COVER"
                 log.warning(
                     f"De-risking gross: reducing {sym} by {reduce_qty:.2f} to lower total exposure."
                 )
                 self._place_trade(broker, pm, sym, side, reduce_qty, price, 0.0, 0.0, 0.0)
-                overage -= reduce_notional
+                overage -= reduce_qty * price
 
         # Net exposure
         current_net = rm.get_net_exposure(latest_prices)
@@ -820,12 +820,18 @@ class TradingEngine:
                 notional = pos.quantity * price
                 reduce_notional = min(notional, overage_net)
                 reduce_qty = reduce_notional / price
+
+                if not self._is_crypto(sym):
+                    reduce_qty = int(reduce_qty)
+                    if reduce_qty <= 0:
+                        continue
+
                 side = "SELL" if pos.side == "BUY" else "BUY_TO_COVER"
                 log.warning(
                     f"De-risking net: reducing {sym} by {reduce_qty:.2f} to lower net exposure."
                 )
                 self._place_trade(broker, pm, sym, side, reduce_qty, price, 0.0, 0.0, 0.0)
-                overage_net -= reduce_notional
+                overage_net -= reduce_qty * price
 
     def _rotate_underperformers(
         self, broker, pm, latest_prices: dict, active_symbols: list[str]
@@ -1030,6 +1036,36 @@ class TradingEngine:
 
             for symbol in symbols:
                 pos = pm.positions.get(symbol)
+
+                # ── FALLBACK: If internal position missing, ask broker directly ──
+                if pos is None and not self._is_crypto(symbol):
+                    try:
+                        broker_positions = broker.get_positions()
+                        for bp in broker_positions:
+                            if bp.get("symbol") == symbol:
+                                qty = bp.get("quantity", 0.0)
+                                avg_cost = bp.get("avg_cost", 0.0)
+                                if qty != 0:
+                                    side = "BUY" if qty > 0 else "SELL"
+                                    init_stop = float('inf') if side == "SELL" else 0.0
+                                    pm.open_position(
+                                        Position(
+                                            symbol=symbol,
+                                            side=side,
+                                            quantity=abs(qty),
+                                            entry_price=avg_cost,
+                                            stop_loss=init_stop,
+                                        )
+                                    )
+                                    pos = pm.positions[symbol]
+                                    log.warning(
+                                        f"Fallback sync: found broker position for {symbol} "
+                                        f"({side} {abs(qty)} shares). Internal manager updated."
+                                    )
+                                break
+                    except Exception as e:  # noqa: BLE001
+                        log.error(f"Fallback broker position check failed for {symbol}: {e}")
+
                 current_side = pos.side if pos else None
 
                 # ── Cooldown check for new entries ──
@@ -1266,6 +1302,12 @@ class TradingEngine:
         """Synchronise internal positions with broker positions for any broker."""
         try:
             broker_positions = broker.get_positions()
+            log.debug(
+                f"Position sync: broker '{broker.__class__.__name__}' returned "
+                f"{len(broker_positions)} positions: "
+                f"{[(p.get('symbol'), p.get('quantity')) for p in broker_positions]}"
+            )
+
             symbols_in_broker = {p["symbol"] for p in broker_positions}
             for sym in list(pm.positions.keys()):
                 if sym not in symbols_in_broker:
@@ -1303,6 +1345,11 @@ class TradingEngine:
                         pos.side == "SELL" and pos.stop_loss == 0.0
                     ):
                         pos.stop_loss = init_stop
+
+            log.debug(
+                f"Position manager state after sync for {broker.__class__.__name__}: "
+                f"{[(sym, pos.side, pos.quantity) for sym, pos in pm.positions.items()]}"
+            )
         except Exception as e:  # noqa: BLE001
             log.error(f"Position sync failed: {e}")
 

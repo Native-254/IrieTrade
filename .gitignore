@@ -11,3 +11,4 @@ FIX_TODO.md
 data/.welcome_shown
 live/data/.encryption_key
 engine.py.backup
+monitoring/api.backup
