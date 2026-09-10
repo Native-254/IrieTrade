@@ -427,6 +427,7 @@ class TradingEngine:
         stop_loss: float,
         atr: float,
         vol_stop_mult: float,
+        strategy_name: str | None = None,
     ) -> bool:
         if self._earnings_nearby(symbol):
             self.email.send_error_alert(
@@ -463,16 +464,12 @@ class TradingEngine:
                 return False
 
             use_bracket = getattr(broker, "supports_bracket", True)
+            slipped_stop_loss = self._apply_slippage(
+                stop_loss, "SELL" if action == "BUY" else "BUY_TO_COVER"
+            )
+            tp_price = slipped_price + (atr * vol_stop_mult * 2) if action == "BUY" else slipped_price - (atr * vol_stop_mult * 2)
 
             if use_bracket:
-                stop_loss = self._apply_slippage(
-                    stop_loss, "SELL" if action == "BUY" else "BUY_TO_COVER"
-                )
-                tp_price = (
-                    slipped_price + (atr * vol_stop_mult * 2)
-                    if action == "BUY"
-                    else slipped_price - (atr * vol_stop_mult * 2)
-                )
                 try:
                     broker.connect()
                     if action == "BUY":
@@ -480,7 +477,7 @@ class TradingEngine:
                             symbol,
                             filled_qty,
                             slipped_price,
-                            stop_loss,
+                            slipped_stop_loss,
                             tp_price,
                         )
                     else:
@@ -488,7 +485,7 @@ class TradingEngine:
                             symbol,
                             filled_qty,
                             slipped_price,
-                            stop_loss,
+                            slipped_stop_loss,
                             tp_price,
                         )
                     if not order_id:
@@ -524,23 +521,29 @@ class TradingEngine:
                             side="BUY" if action == "BUY" else "SELL",
                             quantity=filled_qty,
                             entry_price=net_entry_price,
-                            stop_loss=stop_loss,
+                            stop_loss=slipped_stop_loss,
                             stop_order_id=safe_stop_id,
                             entry_time=datetime.now(timezone.utc),
                         )
                     )
                     self.email.send_trade_alert(symbol, action, filled_qty, avg_price)
-                    # Add telegram channel post after successful entry
                     broker_label = self._get_broker_source(broker)
-                    direction = "🟢 BUY" if action == "BUY" else "🔴 SELL SHORT"
-                    self.telegram.send_channel_signal(
-                        f"<b>{direction} — {symbol}</b>\n"
+                    direction_emoji = "🟢" if action == "BUY" else "🔴"
+                    direction_text = "BUY" if action == "BUY" else "SELL SHORT"
+                    strategy_display = strategy_name if strategy_name is not None else "Unknown"
+
+                    entry_message = (
+                        f"<b>{direction_emoji} ENTRY — {symbol}</b>\n"
+                        f"Strategy: {strategy_display}\n"
                         f"Exchange: <code>{broker_label}</code>\n"
                         f"Quantity: <code>{filled_qty}</code>\n"
                         f"Entry: <code>${avg_price:,.4f}</code>\n"
-                        f"Stop: <code>${stop_loss:,.4f}</code>\n"
+                        f"Stop: <code>${slipped_stop_loss:,.4f}</code>\n"
+                        f"Target: <code>${tp_price:,.4f}</code>\n"
+                        f"Risk: {self.kelly_fraction()*100:.1f}% of portfolio\n"
                         f"<i>Not financial advice.</i>"
                     )
+                    self.telegram.send_channel_signal(entry_message)
                     log.success(
                         f"Filled {action} {filled_qty} {symbol} @ ${avg_price:.2f} (bracket)"
                     )
@@ -731,17 +734,31 @@ class TradingEngine:
                     )
 
                 self.email.send_trade_alert(symbol, action, filled_qty, avg_price)
-                # Add telegram channel post after successful exit
                 broker_label = self._get_broker_source(broker)
-                direction = "🔵 CLOSE LONG" if action == "SELL" else "🟣 COVER SHORT"
-                self.telegram.send_channel_signal(
-                    f"<b>{direction} — {symbol}</b>\n"
-                    f"Exchange: <code>{broker_label}</code>\n"
-                    f"Quantity: <code>{filled_qty}</code>\n"
-                    f"Exit: <code>${avg_price:,.4f}</code>\n"
-                    f"P&L: <code>{pnl_frac:+.2%}</code>\n"
+                if action == "SELL":
+                    direction_emoji = "🔵"
+                    direction_text = "CLOSED"
+                else:  # BUY_TO_COVER
+                    direction_emoji = "🟣"
+                    direction_text = "COVERED"
+
+                holding_time = datetime.now(timezone.utc) - pos.entry_time
+                total_seconds = holding_time.total_seconds()
+                hours = int(total_seconds // 3600)
+                minutes = int((total_seconds % 3600) // 60)
+                pnl_percent = pnl_frac * 100
+                pnl_amount = pnl_dollar
+                strategy_display = strategy_name if strategy_name is not None else "Unknown"
+
+                exit_message = (
+                    f"<b>{direction_emoji} {direction_text} — {symbol}</b>\n"
+                    f"Strategy: {strategy_display}\n"
+                    f"Entry: <code>{pos.entry_price:,.4f}</code> → Exit: <code>${avg_price:,.4f}</code>\n"
+                    f"Result: {pnl_percent:+.2f}%  |  P&L: <code>${pnl_amount:+.2f}</code>\n"
+                    f"Held: {hours}h {minutes}m\n"
                     f"<i>Not financial advice.</i>"
                 )
+                self.telegram.send_channel_signal(exit_message)
                 log.success(
                     f"Closed {action} {filled_qty} {symbol} @ ${avg_price:.2f}, P&L {pnl_frac:.4%}"
                 )
@@ -799,7 +816,7 @@ class TradingEngine:
                 log.warning(
                     f"De-risking {sym}: reducing {reduce_qty:.2f} shares to enforce single-name limit."
                 )
-                self._place_trade(broker, pm, sym, side, reduce_qty, price, 0.0, 0.0, 0.0)
+                self._place_trade(broker, pm, sym, side, reduce_qty, price, 0.0, 0.0, 0.0, strategy_name="Single Name Limit")
 
         # Gross exposure
         current_gross = rm.get_gross_exposure(latest_prices)
@@ -829,7 +846,7 @@ class TradingEngine:
                 log.warning(
                     f"De-risking gross: reducing {sym} by {reduce_qty:.2f} to lower total exposure."
                 )
-                self._place_trade(broker, pm, sym, side, reduce_qty, price, 0.0, 0.0, 0.0)
+                self._place_trade(broker, pm, sym, side, reduce_qty, price, 0.0, 0.0, 0.0, strategy_name="Gross Exposure Limit")
                 overage -= reduce_qty * price
 
         # Net exposure
@@ -863,7 +880,7 @@ class TradingEngine:
                 log.warning(
                     f"De-risking net: reducing {sym} by {reduce_qty:.2f} to lower net exposure."
                 )
-                self._place_trade(broker, pm, sym, side, reduce_qty, price, 0.0, 0.0, 0.0)
+                self._place_trade(broker, pm, sym, side, reduce_qty, price, 0.0, 0.0, 0.0, strategy_name="Net Exposure Limit")
                 overage_net -= reduce_qty * price
 
     def _rotate_underperformers(
@@ -888,7 +905,7 @@ class TradingEngine:
                 log.warning(
                     f"Rotating out underperforming {sym}: P&L {pnl_pct:.2%}. Closing position."
                 )
-                self._place_trade(broker, pm, sym, side, pos.quantity, price, 0.0, 0.0, 0.0)
+                self._place_trade(broker, pm, sym, side, pos.quantity, price, 0.0, 0.0, 0.0, strategy_name="Underperformer")
 
     def _apply_dynamic_exits(
         self, broker, pm, latest_prices: dict
@@ -912,7 +929,7 @@ class TradingEngine:
                     log.warning(
                         f"Time stop triggered for {sym}: held {holding_hours:.1f}h > {max_holding_hours}h."
                     )
-                    self._place_trade(broker, pm, sym, side, pos.quantity, price, 0.0, 0.0, 0.0)
+                    self._place_trade(broker, pm, sym, side, pos.quantity, price, 0.0, 0.0, 0.0, strategy_name="Time Stop")
                     continue
 
             # Unrealized loss exit
@@ -926,7 +943,7 @@ class TradingEngine:
                 log.warning(
                     f"Drawdown stop triggered for {sym}: P&L {pnl_pct:.2%} < {max_unrealized_loss_pct:.2%}."
                 )
-                self._place_trade(broker, pm, sym, side, pos.quantity, price, 0.0, 0.0, 0.0)
+                self._place_trade(broker, pm, sym, side, pos.quantity, price, 0.0, 0.0, 0.0, strategy_name="Drawdown Stop")
 
     # ------------------------------------------------------------------
     # Main iteration loop – runs over all brokers
@@ -1037,6 +1054,7 @@ class TradingEngine:
                             stop_loss=0.0,
                             atr=0.0,
                             vol_stop_mult=0.0,
+                            strategy_name="Stop Loss",
                         )
                         if success:
                             log.success(f"Stop-loss closure executed for {sym}.")
@@ -1185,6 +1203,7 @@ class TradingEngine:
                         )
                         continue
                     quantity = pos.quantity
+                    strategy_display = reasons[0] if reasons else "Signal"
                     success = self._place_trade(
                         broker,
                         pm,
@@ -1195,6 +1214,7 @@ class TradingEngine:
                         stop_loss=0.0,
                         atr=0.0,
                         vol_stop_mult=0.0,
+                        strategy_name=strategy_display,
                     )
                     if success:
                         log.success(
@@ -1301,6 +1321,7 @@ class TradingEngine:
                     log.warning(f"Earnings nearby for {symbol}, skipping.")
                     continue
 
+                strategy_display = reasons[0] if reasons else "Signal"
                 success = self._place_trade(
                     broker,
                     pm,
@@ -1311,6 +1332,7 @@ class TradingEngine:
                     stop_loss,
                     atr,
                     vol_stop_mult,
+                    strategy_name=strategy_display,
                 )
                 if success:
                     log.success(
