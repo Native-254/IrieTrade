@@ -327,7 +327,6 @@ async def dashboard():
     positions = {}
     for pm in trading_engine.position_managers.values():
         positions.update(pm.positions)
-    open_pos = len(positions)
 
     df = pd.DataFrame(history, columns=["time", "nav"])
     df.set_index("time", inplace=True)
@@ -354,7 +353,6 @@ async def dashboard():
     unrealized_pnl = computed_unrealized
     realized_pnl = getattr(trading_engine, "realized_pnl", 0.0)
     trading_total = unrealized_pnl + realized_pnl
-    interest_effect = (last_nav - first_nav) - trading_total
 
     rolling_sharpe = None
     if len(df) >= 30:
@@ -415,7 +413,7 @@ async def dashboard():
             pnl = (current_price - pos.entry_price) * pos.quantity
         else:
             pnl = (pos.entry_price - current_price) * pos.quantity
-        pnl_class = "metric-positive" if pnl >= 0 else "metric-negative"
+        pnl_class = "up" if pnl >= 0 else "down"
         stop_display = f"${pos.stop_loss:,.2f}" if pos.stop_loss else "—"
         position_rows += f"""
             <tr>
@@ -440,451 +438,34 @@ async def dashboard():
 
     now_utc = datetime.now(timezone.utc)
 
-    return HTMLResponse(f"""
-    <!DOCTYPE html>
-    <html lang="en">
-    <head>
-        <meta charset="UTF-8">
-        <meta name="viewport" content="width=device-width, initial-scale=1.0">
-        <meta http-equiv="refresh" content="60">
-        <meta name="theme-color" content="#121416">
-        <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Crect width='64' height='64' rx='16' fill='%23121416'/%3E%3Cpath d='M16 44 27 20l8 14 6-10 7 20' fill='none' stroke='%2343d18b' stroke-linecap='round' stroke-linejoin='round' stroke-width='6'/%3E%3C/svg%3E">
-        <title>Irie Trade – Live Dashboard</title>
-        <style>
-            :root {{
-                color-scheme: light;
-                --bg: #f4f5f7;
-                --surface: #ffffff;
-                --surface-muted: #f8f9fb;
-                --border: #e7e9ee;
-                --text: #15171a;
-                --muted: #7d8490;
-                --accent: #121416;
-                --positive: #159a62;
-                --negative: #d94f5c;
-                --shadow: 0 14px 40px rgba(28, 35, 45, 0.07);
-                font-family: 'Archivo', 'Segoe UI', sans-serif;
-                background: var(--bg);
-                color: var(--text);
-            }}
-            :root[data-theme="dark"] {{
-                color-scheme: dark;
-                --bg: #0d1015;
-                --surface: #151922;
-                --surface-muted: #1b202a;
-                --border: #292f3a;
-                --text: #f5f7fa;
-                --muted: #9ca5b3;
-                --accent: #f5f7fa;
-                --positive: #43d18b;
-                --negative: #ff7a86;
-                --shadow: 0 16px 44px rgba(0, 0, 0, 0.24);
-            }}
-            * {{ box-sizing: border-box; }}
-            html {{ scroll-behavior: smooth; }}
-            body {{
-                margin: 0;
-                min-height: 100vh;
-                background: var(--bg);
-                color: var(--text);
-                transition: background 180ms ease, color 180ms ease;
-            }}
-            button, a {{ -webkit-tap-highlight-color: transparent; }}
-            button:focus-visible, a:focus-visible {{ outline: 3px solid rgba(21, 154, 98, 0.3); outline-offset: 2px; }}
-            .layout {{ display: grid; grid-template-columns: 224px minmax(0, 1fr); gap: 30px; max-width: 1560px; margin: 0 auto; padding: 28px 32px 40px; transition: grid-template-columns 220ms ease; }}
-            .layout.nav-collapsed {{ grid-template-columns: 72px minmax(0, 1fr); }}
-            .sidebar {{ position: sticky; top: 28px; height: calc(100vh - 56px); background: var(--surface); border: 1px solid var(--border); border-radius: 18px; padding: 24px 16px; display: flex; flex-direction: column; box-shadow: var(--shadow); overflow: hidden; }}
-            .brand {{ display: flex; align-items: center; gap: 11px; padding: 0 10px 34px; }}
-            .brand-mark {{ display: grid; place-items: center; width: 30px; height: 30px; flex: 0 0 30px; border-radius: 9px; background: var(--accent); color: var(--surface); }}
-            .brand-mark svg {{ width: 22px; height: 22px; }}
-            .brand-title {{ font-size: 21px; font-weight: 700; letter-spacing: -0.04em; }}
-            .brand-toggle {{ display: grid; place-items: center; width: 32px; height: 32px; margin-left: auto; border: 0; border-radius: 8px; background: transparent; color: var(--muted); cursor: pointer; }}
-            .brand-toggle:hover {{ background: var(--surface-muted); color: var(--text); }}
-            .brand-toggle svg {{ width: 17px; height: 17px; }}
-            .nav-label {{ padding: 0 12px 10px; color: var(--muted); font-size: 10px; font-weight: 700; letter-spacing: 0.14em; text-transform: uppercase; }}
-            .nav-item {{ display: flex; align-items: center; gap: 11px; min-height: 42px; padding: 0 12px; margin: 2px 0; border-radius: 9px; color: var(--muted); text-decoration: none; font-size: 13px; font-weight: 600; transition: background 180ms ease, color 180ms ease; }}
-            .nav-item svg {{ width: 16px; height: 16px; flex: 0 0 16px; }}
-            .nav-item.active, .nav-item:hover {{ background: var(--surface-muted); color: var(--text); }}
-            .sidebar-footer {{ margin-top: auto; padding: 16px 12px 0; border-top: 1px solid var(--border); color: var(--muted); font-size: 11px; line-height: 1.5; }}
-            .nav-collapsed .brand {{ padding-left: 4px; padding-right: 4px; }}
-            .nav-collapsed .brand-title, .nav-collapsed .nav-label, .nav-collapsed .nav-item span, .nav-collapsed .sidebar-footer {{ display: none; }}
-            .nav-collapsed .brand {{ justify-content: center; }}
-            .nav-collapsed .nav-item {{ justify-content: center; padding: 0; }}
-            main {{ min-width: 0; }}
-            .topbar {{ display: flex; justify-content: space-between; align-items: center; gap: 20px; margin-bottom: 28px; }}
-            .eyebrow {{ color: var(--muted); font-size: 11px; font-weight: 700; letter-spacing: 0.12em; text-transform: uppercase; }}
-            .topbar h2 {{ margin: 5px 0 0; font-size: 24px; letter-spacing: -0.04em; }}
-            .topbar-actions {{ display: flex; align-items: center; gap: 10px; }}
-            .theme-toggle, .icon-button {{ min-height: 40px; padding: 0 14px; border: 1px solid var(--border); border-radius: 9px; background: var(--surface); color: var(--text); cursor: pointer; font: inherit; font-size: 12px; font-weight: 700; transition: background 180ms ease, border-color 180ms ease, transform 180ms ease; }}
-            .icon-button {{ display: grid; place-items: center; width: 40px; padding: 0; }}
-            .icon-button svg {{ width: 17px; height: 17px; }}
-            .theme-toggle:hover {{ background: var(--surface-muted); }}
-            .theme-toggle:hover, .icon-button:hover {{ transform: translateY(-1px); }}
-            .theme-toggle:focus-visible {{ outline: 3px solid rgba(21, 154, 98, 0.25); outline-offset: 2px; }}
-            .status-pill {{ display: inline-flex; align-items: center; gap: 7px; min-height: 34px; padding: 0 11px; border-radius: 999px; background: var(--surface-muted); color: var(--text); font-size: 12px; font-weight: 700; }}
-            .status-pill::before {{ content: ''; width: 7px; height: 7px; border-radius: 50%; background: var(--positive); }}
-            .panel {{ background: var(--surface); border: 1px solid var(--border); border-radius: 16px; padding: 26px; margin-bottom: 20px; box-shadow: var(--shadow); }}
-            .panel-header {{ display: flex; justify-content: space-between; align-items: flex-start; gap: 18px; margin-bottom: 22px; }}
-            .panel-header h1 {{ margin: 0; font-size: 22px; letter-spacing: -0.04em; }}
-            .panel-header p {{ margin: 7px 0 0; color: var(--muted); font-size: 13px; }}
-            .panel-tools {{ display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }}
-            .range-control {{ display: inline-flex; align-items: center; gap: 2px; padding: 3px; border: 1px solid var(--border); border-radius: 9px; background: var(--surface-muted); }}
-            .range-button {{ min-height: 30px; padding: 0 9px; border: 0; border-radius: 6px; background: transparent; color: var(--muted); cursor: pointer; font: inherit; font-size: 11px; font-weight: 700; }}
-            .range-button:hover, .range-button.active {{ background: var(--surface); color: var(--text); box-shadow: 0 1px 3px rgba(0,0,0,0.08); }}
-            .stat-grid {{ display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 1px; overflow: hidden; border: 1px solid var(--border); border-radius: 12px; background: var(--border); }}
-            .stat-card {{ min-width: 0; background: var(--surface); padding: 18px; cursor: pointer; transition: background 180ms ease, transform 180ms ease; }}
-            .stat-card:hover {{ background: var(--surface-muted); transform: translateY(-2px); }}
-            .stat-label {{ font-size: 10px; text-transform: uppercase; letter-spacing: 0.1em; color: var(--muted); margin-bottom: 11px; }}
-            .stat-value {{ font-size: 24px; font-weight: 700; line-height: 1.1; letter-spacing: -0.04em; overflow-wrap: anywhere; }}
-            .stat-subtext {{ margin-top: 8px; color: var(--muted); font-size: 11px; }}
-            .metric-positive {{ color: var(--positive); }}
-            .metric-negative {{ color: var(--negative); }}
-            .asset-grid {{ display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 12px; margin-top: 16px; }}
-            .asset-card {{ background: var(--surface-muted); border: 1px solid var(--border); border-radius: 12px; padding: 17px; }}
-            .asset-card h3 {{ margin: 0; font-size: 13px; font-weight: 700; }}
-            .asset-value {{ font-size: 20px; font-weight: 700; margin-top: 14px; letter-spacing: -0.03em; }}
-            .asset-change {{ margin-top: 7px; color: var(--muted); font-size: 11px; line-height: 1.4; }}
-            .positions-table {{ width: 100%; border-collapse: collapse; margin-top: 4px; }}
-            .positions-table th, .positions-table td {{ padding: 14px 12px; text-align: left; border-bottom: 1px solid var(--border); font-size: 13px; white-space: nowrap; }}
-            .positions-table th {{ color: var(--muted); font-size: 10px; font-weight: 700; letter-spacing: 0.08em; text-transform: uppercase; }}
-            .positions-table tr:last-child td {{ border-bottom: 0; }}
-            .positions-empty td {{ color: var(--muted); text-align: center; }}
-            .chart-card {{ min-height: 420px; padding-top: 18px; }}
-            .chart-card .js-plotly-plot {{ min-height: 380px; }}
-            .insight-dialog {{ width: min(440px, calc(100vw - 32px)); border: 1px solid var(--border); border-radius: 16px; padding: 0; background: var(--surface); color: var(--text); box-shadow: 0 24px 80px rgba(0,0,0,0.22); }}
-            .insight-dialog::backdrop {{ background: rgba(9, 12, 18, 0.46); backdrop-filter: blur(4px); }}
-            .dialog-inner {{ padding: 24px; }}
-            .dialog-header {{ display: flex; align-items: flex-start; justify-content: space-between; gap: 16px; }}
-            .dialog-header h2 {{ margin: 0; font-size: 18px; }}
-            .dialog-close {{ border: 0; background: transparent; color: var(--muted); cursor: pointer; font-size: 20px; line-height: 1; }}
-            .dialog-copy {{ margin: 18px 0 0; color: var(--muted); font-size: 13px; line-height: 1.6; }}
-            .assistant-bar {{ display: flex; gap: 8px; align-items: center; margin: 0 0 20px; padding: 8px; border: 1px solid var(--border); border-radius: 12px; background: var(--surface); box-shadow: var(--shadow); }}
-            .assistant-bar input {{ flex: 1; min-width: 0; border: 0; outline: 0; background: transparent; color: var(--text); font: inherit; font-size: 13px; padding: 8px 10px; }}
-            .assistant-bar button {{ min-height: 34px; padding: 0 14px; border: 0; border-radius: 8px; background: var(--accent); color: var(--surface); cursor: pointer; font: inherit; font-size: 12px; font-weight: 700; }}
-            .assistant-bar button:disabled {{ opacity: 0.55; cursor: wait; }}
-            .assistant-answer {{ margin: -8px 0 20px; padding: 12px 14px; border: 1px solid var(--border); border-radius: 10px; color: var(--muted); background: var(--surface-muted); font-size: 13px; line-height: 1.5; white-space: pre-wrap; }}
-            .footer {{ margin-top: 26px; text-align: center; color: var(--muted); font-size: 11px; }}
-            @media (max-width: 1180px) {{ .layout {{ grid-template-columns: 190px minmax(0, 1fr); padding: 22px; gap: 20px; }} .stat-grid {{ grid-template-columns: repeat(2, minmax(0, 1fr)); }} .asset-grid {{ grid-template-columns: repeat(2, minmax(0, 1fr)); }} }}
-            @media (max-width: 760px) {{ .layout, .layout.nav-collapsed {{ display: block; padding: 14px; }} .sidebar {{ position: static; height: auto; margin-bottom: 18px; padding: 14px; }} .brand, .nav-collapsed .brand {{ padding: 4px 8px 16px; justify-content: flex-start; }} .brand-title, .nav-collapsed .brand-title, .brand-toggle, .nav-collapsed .brand-toggle, .nav-label, .sidebar-footer {{ display: none; }} .sidebar nav, .nav-collapsed .sidebar nav {{ display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 4px; }} .nav-item, .nav-collapsed .nav-item {{ justify-content: center; padding: 0 6px; text-align: center; font-size: 11px; }} .nav-item span, .nav-collapsed .nav-item span {{ display: inline; }} .topbar {{ align-items: flex-start; margin-bottom: 18px; }} .topbar h2 {{ font-size: 20px; }} .panel {{ padding: 18px; border-radius: 13px; }} .panel-header {{ flex-direction: column; }} .stat-grid, .asset-grid {{ grid-template-columns: 1fr 1fr; }} .stat-card {{ padding: 14px; }} .stat-value {{ font-size: 20px; }} .chart-card {{ min-height: 320px; overflow: hidden; }} .assistant-bar {{ margin-bottom: 16px; }} }}
-            @media (max-width: 420px) {{ .stat-grid, .asset-grid {{ grid-template-columns: 1fr; }} .topbar-actions {{ flex-direction: column; align-items: flex-end; }} .theme-toggle {{ min-height: 36px; }} }}
-            @media (prefers-reduced-motion: reduce) {{ *, *::before, *::after {{ scroll-behavior: auto !important; transition-duration: 0.01ms !important; }} }}
-        </style>
-    </head>
-    <body>
-        <div class="layout">
-            <aside class="sidebar">
-                <div class="brand">
-                    <div class="brand-mark" aria-label="IrieTrade logo">
-                        <svg viewBox="0 0 24 24" fill="none" aria-hidden="true">
-                            <path d="M4 17 8.5 7l3.3 6 2.6-4 2.9 8" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="2.2"/>
-                        </svg>
-                    </div>
-                    <div class="brand-title">IrieTrade</div>
-                    <button class="brand-toggle" id="sidebar-toggle" type="button" aria-label="Collapse navigation" aria-expanded="true">
-                        <svg viewBox="0 0 24 24" fill="none" aria-hidden="true"><path d="M9 6 15 12 9 18" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="2"/></svg>
-                    </button>
-                </div>
-                <div class="nav-label">Workspace</div>
-                <nav aria-label="Dashboard navigation">
-                    <a class="nav-item active" href="#overview"><svg viewBox="0 0 24 24" fill="none" aria-hidden="true"><rect x="4" y="4" width="6" height="6" rx="1" stroke="currentColor" stroke-width="1.8"/><rect x="14" y="4" width="6" height="6" rx="1" stroke="currentColor" stroke-width="1.8"/><rect x="4" y="14" width="6" height="6" rx="1" stroke="currentColor" stroke-width="1.8"/><rect x="14" y="14" width="6" height="6" rx="1" stroke="currentColor" stroke-width="1.8"/></svg><span>Overview</span></a>
-                    <a class="nav-item" href="#positions"><svg viewBox="0 0 24 24" fill="none" aria-hidden="true"><path d="M5 19V9m7 10V5m7 14v-7" stroke="currentColor" stroke-linecap="round" stroke-width="1.8"/></svg><span>Portfolio</span></a>
-                    <a class="nav-item" href="#alerts"><svg viewBox="0 0 24 24" fill="none" aria-hidden="true"><path d="M6 4h9l3 3v13a1 1 0 0 1-1 1H6a1 1 0 0 1-1-1V5a1 1 0 0 1 1-1Z" stroke="currentColor" stroke-linejoin="round" stroke-width="1.8"/><path d="M8 10h8M8 14h8M8 18h5" stroke="currentColor" stroke-linecap="round" stroke-width="1.6"/></svg><span>Ledger</span></a>
-                    <a class="nav-item" href="/setup"><svg viewBox="0 0 24 24" fill="none" aria-hidden="true"><path d="M12 15.5a3.5 3.5 0 1 0 0-7 3.5 3.5 0 0 0 0 7Z" stroke="currentColor" stroke-width="1.8"/><path d="m19.4 15 .1.1a2 2 0 0 1-2.8 2.8l-.1-.1a2 2 0 0 0-3.4 1.4v.2a2 2 0 0 1-4 0v-.2A2 2 0 0 0 5.8 17.8l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1A2 2 0 0 0 1.6 11.6h-.2a2 2 0 0 1 0-4h.2A2 2 0 0 0 3 4.2l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1A2 2 0 0 0 9.2 0h.2a2 2 0 0 1 4 0v.2A2 2 0 0 0 16.8 1.4l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a2 2 0 0 0 1.4 3.4h.2a2 2 0 0 1 0 4H21a2 2 0 0 0-1.6 3.4Z" transform="scale(.72) translate(4.5 4.5)" stroke="currentColor" stroke-width="1.8"/></svg><span>Settings</span></a>
-                </nav>
-                <div class="sidebar-footer">Read-only dashboard<br>Updates every hour</div>
-            </aside>
-            <main>
-                <header class="topbar">
-                    <div>
-                        <div class="eyebrow">Trading workspace</div>
-                        <h2>Portfolio overview</h2>
-                    </div>
-                    <div class="topbar-actions">
-                        <div class="status-pill">{bot_status}</div>
-                        <button class="icon-button" id="refresh-button" type="button" aria-label="Refresh dashboard now" title="Refresh dashboard now">
-                            <svg viewBox="0 0 24 24" fill="none" aria-hidden="true"><path d="M20 11a8 8 0 0 0-14.7-4L4 9m0 0V4m0 5h5M4 13a8 8 0 0 0 14.7 4L20 15m0 0v5m0-5h-5" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="1.8"/></svg>
-                        </button>
-                        <button class="theme-toggle" id="theme-toggle" type="button" aria-label="Switch color theme">Dark mode</button>
-                    </div>
-                </header>
-                <form class="assistant-bar" id="assistant-form">
-                    <input id="assistant-question" type="text" placeholder="Ask about the current portfolio" aria-label="Ask the dashboard assistant">
-                    <button type="submit" id="assistant-submit">Ask assistant</button>
-                </form>
-                <div class="assistant-answer" id="assistant-answer" hidden></div>
-                <section id="overview" class="panel">
-                    <div class="panel-header">
-                        <div>
-                            <h1>Live portfolio overview</h1>
-                            <p>Monitor NAV, risk, positions, and bot health without interrupting execution.</p>
-                        </div>
-                    </div>
-                    <div class="stat-grid">
-                        <div class="stat-card" tabindex="0" data-metric="Net Asset Value" data-detail="Current portfolio value across all available broker accounts.">
-                            <div class="stat-label">Net Asset Value</div>
-                            <div class="stat-value">${last_nav:,.2f}</div>
-                            <div class="stat-subtext">Current portfolio value</div>
-                        </div>
-                        <div class="stat-card" tabindex="0" data-metric="Daily P&L" data-detail="The combined profit or loss recorded by all broker risk managers for the current trading day.">
-                            <div class="stat-label">Daily P&L</div>
-                            <div class="stat-value {("metric-positive" if daily_pnl >= 0 else "metric-negative")}">{daily_pnl:+,.2f}</div>
-                            <div class="stat-subtext">{daily_pct:+.2f}% change</div>
-                        </div>
-                        <div class="stat-card" tabindex="0" data-metric="Unrealised P&L" data-detail="The mark-to-market profit or loss calculated from the latest prices and open positions.">
-                            <div class="stat-label">Unrealised P&L</div>
-                            <div class="stat-value {("metric-positive" if unrealized_pnl >= 0 else "metric-negative")}">{unrealized_pnl:+,.2f}</div>
-                            <div class="stat-subtext">Mark‑to‑market</div>
-                        </div>
-                        <div class="stat-card" tabindex="0" data-metric="Trading P&L" data-detail="Unrealised plus realised trading performance, excluding interest and dividend effects.">
-                            <div class="stat-label">Trading P&L (U+R)</div>
-                            <div class="stat-value {("metric-positive" if trading_total >= 0 else "metric-negative")}">{trading_total:+,.2f}</div>
-                            <div class="stat-subtext">Excludes interest & dividends</div>
-                        </div>
-                        <div class="stat-card" tabindex="0" data-metric="Interest & Div Effect" data-detail="The portion of NAV movement not explained by trading performance.">
-                            <div class="stat-label">Interest & Div Effect</div>
-                            <div class="stat-value {("metric-positive" if interest_effect >= 0 else "metric-negative")}">{interest_effect:+,.2f}</div>
-                            <div class="stat-subtext">NAV change driven by cash</div>
-                        </div>
-                        <div class="stat-card" tabindex="0" data-metric="Rolling Sharpe" data-detail="A 30-day annualised risk-adjusted return estimate when enough NAV history is available.">
-                            <div class="stat-label">30-Day Rolling Sharpe</div>
-                            <div class="stat-value {("metric-positive" if rolling_sharpe is not None and rolling_sharpe >= 0 else "metric-negative")}">{sharpe_display}</div>
-                            <div class="stat-subtext">Risk-adjusted return (annualised)</div>
-                        </div>
-                        <div class="stat-card" tabindex="0" data-metric="Portfolio Heat" data-detail="Open risk as a percentage of current capital. Lower values leave more room for new trades.">
-                            <div class="stat-label">Portfolio Heat</div>
-                            <div class="stat-value">{portfolio_heat:.1f}%</div>
-                            <div class="stat-subtext">Open risk vs capital</div>
-                        </div>
-                    </div>
-                    <div class="asset-grid">
-                        <div class="asset-card">
-                            <h3>Equity trend</h3>
-                            <div class="asset-value">{total_return:+.2f}%</div>
-                            <div class="asset-change">Total return from first tracked NAV point</div>
-                        </div>
-                        <div class="asset-card">
-                            <h3>Unrealized P&L</h3>
-                            <div class="asset-value {("metric-positive" if unrealized_pnl >= 0 else "metric-negative")}">{unrealized_pnl:+,.2f}</div>
-                            <div class="asset-change">Broker unrealized P&L</div>
-                        </div>
-                        <div class="asset-card">
-                            <h3>Positions</h3>
-                            <div class="asset-value">{open_pos}</div>
-                            <div class="asset-change">Active position count</div>
-                        </div>
-                        <div class="asset-card">
-                            <h3>Latest refresh</h3>
-                            <div class="asset-value">{now_utc.strftime("%H:%M:%S")}</div>
-                            <div class="asset-change">Real-time dashboard snapshot</div>
-                        </div>
-                    </div>
-                </section>
-
-                <section class="panel chart-card">
-                    <div class="panel-header">
-                        <div>
-                            <h1>Equity curve</h1>
-                            <p>Portfolio NAV over the recorded trading history.</p>
-                        </div>
-                        <div class="panel-tools">
-                            <div class="range-control" role="group" aria-label="Chart time range">
-                                <button class="range-button" data-range="7" type="button">1W</button>
-                                <button class="range-button active" data-range="30" type="button">1M</button>
-                                <button class="range-button" data-range="90" type="button">3M</button>
-                                <button class="range-button" data-range="365" type="button">1Y</button>
-                                <button class="range-button" data-range="all" type="button">All</button>
-                            </div>
-                        </div>
-                    </div>
-                    {plot_html}
-                </section>
-
-                <section id="positions" class="panel">
-                    <div class="panel-header">
-                        <div>
-                            <h1>Open Positions</h1>
-                            <p>A snapshot of current portfolio exposure.</p>
-                        </div>
-                    </div>
-                    <div style="overflow-x:auto;">
-                        <table class="positions-table">
-                            <thead>
-                                <tr>
-                                    <th>Symbol</th>
-                                    <th>Side</th>
-                                    <th>Qty</th>
-                                    <th>Entry</th>
-                                    <th>Stop</th>
-                                    <th>Current</th>
-                                    <th>U-P&L</th>
-                                </tr>
-                            </thead>
-                            <tbody>
-                                {position_rows}
-                            </tbody>
-                        </table>
-                    </div>
-                </section>
-
-                <section id="alerts" class="panel">
-                    <div class="panel-header">
-                        <div>
-                            <h1>Recent Closed Trades</h1>
-                            <p>Last 10 outcomes (win/loss with return).</p>
-                        </div>
-                    </div>
-                    {recent_trades_html}
-                </section>
-
-                <div class="footer">
-                    © 2026 Irie Trade • Data updates every hour • Dashboard is read-only and does not impact bot execution.
-                </div>
-            </main>
-        </div>
-    <dialog class="insight-dialog" id="insight-dialog">
-        <div class="dialog-inner">
-            <div class="dialog-header">
-                <h2 id="dialog-title">Metric detail</h2>
-                <button class="dialog-close" type="button" aria-label="Close metric detail">&times;</button>
-            </div>
-            <p class="dialog-copy" id="dialog-copy"></p>
-        </div>
-    </dialog>
-    <script>
-        const root = document.documentElement;
-        const themeToggle = document.getElementById('theme-toggle');
-        const savedTheme = localStorage.getItem('irietrade-theme');
-        const preferredTheme = savedTheme || (window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light');
-
-        function applyTheme(theme) {{
-            root.dataset.theme = theme;
-            themeToggle.textContent = theme === 'dark' ? 'Light mode' : 'Dark mode';
-            themeToggle.setAttribute('aria-label', theme === 'dark' ? 'Switch to light mode' : 'Switch to dark mode');
-            localStorage.setItem('irietrade-theme', theme);
-        }}
-
-        applyTheme(preferredTheme);
-        themeToggle.addEventListener('click', () => applyTheme(root.dataset.theme === 'dark' ? 'light' : 'dark'));
-
-        const layout = document.querySelector('.layout');
-        const sidebarToggle = document.getElementById('sidebar-toggle');
-        const savedNavState = localStorage.getItem('irietrade-nav-collapsed') === 'true';
-        if (savedNavState) {{
-            layout.classList.add('nav-collapsed');
-            sidebarToggle.setAttribute('aria-expanded', 'false');
-            sidebarToggle.setAttribute('aria-label', 'Expand navigation');
-        }}
-        sidebarToggle.addEventListener('click', () => {{
-            const collapsed = layout.classList.toggle('nav-collapsed');
-            sidebarToggle.setAttribute('aria-expanded', String(!collapsed));
-            sidebarToggle.setAttribute('aria-label', collapsed ? 'Expand navigation' : 'Collapse navigation');
-            localStorage.setItem('irietrade-nav-collapsed', String(collapsed));
-        }});
-
-        const insightDialog = document.getElementById('insight-dialog');
-        const dialogTitle = document.getElementById('dialog-title');
-        const dialogCopy = document.getElementById('dialog-copy');
-        const closeDialog = () => insightDialog.close();
-        document.querySelectorAll('.stat-card[data-metric]').forEach((card) => {{
-            const openDialog = () => {{
-                dialogTitle.textContent = card.dataset.metric;
-                dialogCopy.textContent = card.dataset.detail;
-                insightDialog.showModal();
-            }};
-            card.addEventListener('click', openDialog);
-            card.addEventListener('keydown', (event) => {{
-                if (event.key === 'Enter' || event.key === ' ') {{
-                    event.preventDefault();
-                    openDialog();
-                }}
-            }});
-        }});
-        insightDialog.querySelector('.dialog-close').addEventListener('click', closeDialog);
-        insightDialog.addEventListener('click', (event) => {{
-            if (event.target === insightDialog) closeDialog();
-        }});
-
-        document.getElementById('refresh-button').addEventListener('click', (event) => {{
-            const button = event.currentTarget;
-            button.disabled = true;
-            button.style.opacity = '0.55';
-            window.location.reload();
-        }});
-
-        const assistantForm = document.getElementById('assistant-form');
-        const assistantQuestion = document.getElementById('assistant-question');
-        const assistantSubmit = document.getElementById('assistant-submit');
-        const assistantAnswer = document.getElementById('assistant-answer');
-        assistantForm.addEventListener('submit', async (event) => {{
-            event.preventDefault();
-            const question = assistantQuestion.value.trim();
-            if (!question) return;
-            assistantSubmit.disabled = true;
-            assistantAnswer.hidden = false;
-            assistantAnswer.textContent = 'Reviewing the current dashboard snapshot...';
-            try {{
-                const response = await fetch('/api/assistant', {{
-                    method: 'POST',
-                    headers: {{ 'Content-Type': 'application/json' }},
-                    body: JSON.stringify({{ question }})
-                }});
-                const result = await response.json();
-                assistantAnswer.textContent = result.answer || result.error || 'No assistant response.';
-            }} catch (error) {{
-                assistantAnswer.textContent = 'The assistant request failed. Check the API configuration and try again.';
-            }} finally {{
-                assistantSubmit.disabled = false;
-            }}
-        }});
-
-        const chart = document.querySelector('.js-plotly-plot');
-        document.querySelectorAll('.range-button').forEach((button) => {{
-            button.addEventListener('click', () => {{
-                document.querySelectorAll('.range-button').forEach((item) => item.classList.remove('active'));
-                button.classList.add('active');
-                if (!chart || !window.Plotly) return;
-                if (button.dataset.range === 'all') {{
-                    Plotly.relayout(chart, {{'xaxis.autorange': true}});
-                    return;
-                }}
-                const chartEnd = chart.data?.[0]?.x?.at(-1);
-                const end = chartEnd ? new Date(chartEnd) : new Date();
-                const start = new Date(end);
-                start.setDate(end.getDate() - Number(button.dataset.range));
-                Plotly.relayout(chart, {{'xaxis.autorange': false, 'xaxis.range': [start, end]}});
-            }});
-        }});
-
-        const sections = [...document.querySelectorAll('main section[id]')];
-        const navLinks = [...document.querySelectorAll('.nav-item[href^="#"]')];
-        const sectionObserver = new IntersectionObserver((entries) => {{
-            entries.forEach((entry) => {{
-                if (!entry.isIntersecting) return;
-                navLinks.forEach((link) => link.classList.toggle('active', link.getAttribute('href') === `#${{entry.target.id}}`));
-            }});
-        }}, {{ rootMargin: '-20% 0px -65% 0px', threshold: 0 }});
-        sections.forEach((section) => sectionObserver.observe(section));
-
-        fetch('/api/first-run')
-            .then(r => r.json())
-            .then(data => {{
-                if (data.first_run) {{
-                    const toast = document.createElement('div');
-                    toast.style.cssText = 'position:fixed;bottom:20px;right:20px;background:linear-gradient(135deg,#2d3436,#636e72);color:#fff;padding:20px 28px;border-radius:16px;box-shadow:0 8px 32px rgba(0,0,0,0.3);z-index:9999;font-size:14px;max-width:340px;';
-                    toast.innerHTML = `
-                        <strong>👋 Welcome to IrieTrade!</strong><br><br>
-                        ⭐ <a href="https://github.com/Native-254/IrieTrade" target="_blank" style="color:#fdcb6e;">Star the repo</a><br>
-                        💬 <a href="https://github.com/Native-254/IrieTrade/discussions" target="_blank" style="color:#74b9ff;">Join Discussions</a><br>
-                        ✉️ <a href="mailto:info.native@gmail.com" style="color:#ff7675;">Send a suggestion</a><br><br>
-                        <button onclick="this.parentElement.remove()" style="background:#dfe6e9;color:#2d3436;border:none;padding:6px 14px;border-radius:8px;cursor:pointer;">Got it ✌️</button>
-                    `;
-                    document.body.appendChild(toast);
-                }}
-            }});
-    </script>
-    </body>
-    </html>
-    """)
+    template_path = Path(__file__).with_name("dashboard.html")
+    dashboard_html = template_path.read_text(encoding="utf-8")
+    replacements = {
+        "{{BOT_STATUS}}": bot_status,
+        "{{STATUS_COLOR}}": "var(--up)" if trading_engine.is_running else "var(--down)",
+        "{{NAV}}": f"${last_nav:,.2f}",
+        "{{DAILY_PNL}}": f"{daily_pnl:+,.2f}",
+        "{{DAILY_PCT}}": f"{daily_pct:+.2f}%",
+        "{{DAILY_SIGN}}": "up" if daily_pnl >= 0 else "down",
+        "{{UNREALIZED_PNL}}": f"{unrealized_pnl:+,.2f}",
+        "{{UNREALIZED_SIGN}}": "up" if unrealized_pnl >= 0 else "down",
+        "{{TOTAL_RETURN}}": f"{total_return:+.2f}%",
+        "{{RETURN_SIGN}}": "up" if total_return >= 0 else "down",
+        "{{TRADING_PNL}}": f"{trading_total:+,.2f}",
+        "{{TRADING_SIGN}}": "up" if trading_total >= 0 else "down",
+        "{{SHARPE}}": sharpe_display,
+        "{{SHARPE_SIGN}}": "up" if rolling_sharpe is not None and rolling_sharpe >= 0 else "down",
+        "{{PORTFOLIO_HEAT}}": f"{portfolio_heat:.1f}%",
+        "{{HEAT_WIDTH}}": f"{min(max(portfolio_heat, 0), 100):.1f}",
+        "{{HEAT_COLOR}}": "var(--down)" if portfolio_heat > 20 else "var(--up)",
+        "{{LAST_UPDATED}}": now_utc.strftime("%b %d, %H:%M UTC"),
+        "{{PLOT_HTML}}": plot_html,
+        "{{POSITION_ROWS}}": position_rows,
+        "{{RECENT_TRADES}}": recent_trades_html,
+    }
+    for placeholder, value in replacements.items():
+        dashboard_html = dashboard_html.replace(placeholder, value)
+    return HTMLResponse(dashboard_html)
 
 
 # ---------- Onboarding / Setup ----------

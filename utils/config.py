@@ -23,6 +23,8 @@ def load_config(config_path="config/settings.yaml"):
     )
     config["monitoring"]["telegram"]["bot_token"] = _env("TELEGRAM_BOT_TOKEN")
     config["monitoring"]["telegram"]["chat_id"] = _env("TELEGRAM_CHAT_ID")
+    config["monitoring"]["telegram"]["group_id"] = _env("TELEGRAM_GROUP_ID")
+    config["monitoring"]["telegram"]["channel_id"] = _env("TELEGRAM_CHANNEL_ID")
     config["monitoring"]["discord"]["webhook_url"] = _env(
         "DISCORD_WEBHOOK_URL", config["monitoring"]["discord"]["webhook_url"]
     )

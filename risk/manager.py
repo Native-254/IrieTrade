@@ -7,7 +7,7 @@ class RiskManager:
     def __init__(self, initial_capital: float, position_manager=None, broker_name: str = ""):
         base_config = CONFIG["risk_management"].copy()
         # Remove the per-broker dict before merging, then apply overrides
-        per_broker = base_config.pop("risk_by_broker", {})
+        per_broker = base_config.pop("risk_by_broker", {}) or {}
         self.config = base_config
         if broker_name and broker_name in per_broker:
             self.config.update(per_broker[broker_name])
