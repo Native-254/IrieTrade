@@ -781,15 +781,15 @@ class TradingEngine:
         """Reduce positions that breach risk limits."""
         max_single = capital * rm.config.get(
             "max_position_pct",
-            self.config["risk_management"]["max_position_pct"],
+            self.config["risk_management"].get("max_position_pct", 0.0),
         )
         max_gross = capital * rm.config.get(
             "max_gross_exposure",
-            self.config["risk_management"]["max_gross_exposure"],
+            self.config["risk_management"].get("max_gross_exposure", 0.0),
         )
         max_net = capital * rm.config.get(
             "max_net_exposure",
-            self.config["risk_management"]["max_net_exposure"],
+            self.config["risk_management"].get("max_net_exposure", 0.0),
         )
 
         # Single-name concentration
@@ -1106,6 +1106,8 @@ class TradingEngine:
                                             quantity=abs(qty),
                                             entry_price=avg_cost,
                                             stop_loss=init_stop,
+                                            stop_order_id=0,
+                                            entry_time=datetime.now(timezone.utc),
                                         )
                                     )
                                     pos = pm.positions[symbol]
@@ -1383,24 +1385,29 @@ class TradingEngine:
                 init_stop = float("inf") if side == "SELL" else 0.0
 
                 if sym not in pm.positions:
+                    # Use broker avg_cost if valid, otherwise fall back to latest price
+                    entry_price = avg_cost if avg_cost > 0.0 else self.latest_prices.get(sym, 0.0)
                     pm.open_position(
                         Position(
                             symbol=sym,
                             side=side,
                             quantity=abs(qty),
-                            entry_price=avg_cost,
+                            entry_price=entry_price,
                             stop_loss=init_stop,
+                            stop_order_id=0,
+                            entry_time=datetime.now(timezone.utc),
                         )
                     )
                 else:
                     pos = pm.positions[sym]
                     pos.quantity = abs(qty)
-                    pos.entry_price = avg_cost
+                    if avg_cost > 0:
+                        pos.entry_price = avg_cost
+                    # keep existing entry_price if avg_cost is zero or invalid
                     if pos.stop_loss is None or (
                         pos.side == "SELL" and pos.stop_loss == 0.0
                     ):
                         pos.stop_loss = init_stop
-
             log.debug(
                 f"Position manager state after sync for {broker.__class__.__name__}: "
                 f"{[(sym, pos.side, pos.quantity) for sym, pos in pm.positions.items()]}"

@@ -7,13 +7,12 @@ from risk.position_manager import Position, PositionManager
 class _EmailStub(EmailAlerter):
     def send_error_alert(self, *_args, **_kwargs):
         pass
-
-
 class _DustBrokerStub:
     supports_bracket = False
 
     def __init__(self):
         self.order_was_placed = False
+        self.last_quantity = 0.0
 
     def get_min_order_notional(self, _symbol):
         return 0.1
@@ -24,9 +23,13 @@ class _DustBrokerStub:
     def disconnect(self):
         pass
 
-    def place_order(self, *_args, **_kwargs):
+    def place_order(self, *_args, **kwargs):
         self.order_was_placed = True
+        self.last_quantity = float(kwargs.get("quantity", 0.0))
         return {"order_id": "unexpected"}
+
+    def wait_for_fill(self, _order_id):
+        return {"status": "Filled", "filled": self.last_quantity, "avg_price": 0.0}
 
 
 def _engine_for_unit_tests():
