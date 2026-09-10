@@ -99,6 +99,7 @@ class TradingEngine:
         self.equity_history: list[tuple[datetime, float]] = []
         self.unrealized_pnl: float = 0.0
         self.realized_pnl: float = 0.0
+        self.latest_prices: dict[str, float] = {}
 
         # ──────────── Per‑broker strategy loading ────────────
         strategies_by_broker = self.config["strategies"].get("strategies_by_broker", {})
