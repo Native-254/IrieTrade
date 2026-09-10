@@ -1,0 +1,571 @@
+<!DOCTYPE html>
+    <html lang="en">
+    <head>
+        <meta charset="UTF-8">
+        <meta name="viewport" content="width=device-width, initial-scale=1.0">
+        <meta http-equiv="refresh" content="60">
+        <meta name="theme-color" content="#fbfbfa">
+        <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Crect width='64' height='64' rx='14' fill='%230d0d0d'/%3E%3Cpath d='M14 46 26 18l8 15 6-11 10 24' fill='none' stroke='%2343d18b' stroke-linecap='round' stroke-linejoin='round' stroke-width='6'/%3E%3C/svg%3E">
+        <!-- Swap this favicon + .brand-mark svg for your real logo whenever it's ready -->
+        <title>IrieTrade — Dashboard</title>
+        <link rel="preconnect" href="https://fonts.googleapis.com">
+        <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+        <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;600;700&display=swap" rel="stylesheet">
+        <style>
+            :root {
+                color-scheme: light;
+                --bg: #fbfbf9;
+                --surface: #ffffff;
+                --surface-muted: #f3f3f0;
+                --border: #e8e7e2;
+                --ink: #0d0d0d;
+                --text: #14151a;
+                --muted: #83817a;
+                --up: #1f9d55;
+                --down: #d1453b;
+                --shadow: 0 10px 30px rgba(20, 20, 15, 0.06);
+                --sans: -apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif;
+                --mono: 'JetBrains Mono', ui-monospace, monospace;
+                font-family: var(--sans);
+                background: var(--bg);
+                color: var(--text);
+            }
+            :root[data-theme="dark"] {
+                color-scheme: dark;
+                --bg: #101113;
+                --surface: #17181b;
+                --surface-muted: #1c1d21;
+                --border: #2b2c31;
+                --ink: #f4f3ee;
+                --text: #f4f3ee;
+                --muted: #8f8d87;
+                --shadow: 0 14px 36px rgba(0, 0, 0, 0.4);
+            }
+            * { box-sizing: border-box; }
+            html { scroll-behavior: smooth; }
+            body { margin: 0; min-height: 100vh; background: var(--bg); color: var(--text); transition: background 180ms ease, color 180ms ease; }
+            button, a, input { -webkit-tap-highlight-color: transparent; font-family: inherit; }
+            button:focus-visible, a:focus-visible, input:focus-visible { outline: 2px solid var(--up); outline-offset: 2px; }
+            .wrap { max-width: 1200px; margin: 0 auto; padding: 0 28px; }
+            .up { color: var(--up); }
+            .down { color: var(--down); }
+
+            /* ---------- Topbar ---------- */
+            .topbar { position: sticky; top: 0; z-index: 40; background: var(--bg); border-bottom: 1px solid var(--border); }
+            .topbar-inner { max-width: 1200px; margin: 0 auto; padding: 14px 28px; display: flex; align-items: center; gap: 14px; }
+            .brand { display: flex; align-items: center; gap: 9px; text-decoration: none; color: var(--text); flex: 0 0 auto; }
+            .brand-mark { display: grid; place-items: center; width: 28px; height: 28px; border-radius: 8px; background: var(--ink); color: var(--bg); flex: 0 0 28px; }
+            .brand-mark svg { width: 18px; height: 18px; }
+            .brand-name { font-size: 15px; font-weight: 700; letter-spacing: -0.01em; white-space: nowrap; }
+            .icon-nav { display: flex; align-items: center; gap: 4px; padding: 4px; border-radius: 11px; background: var(--surface-muted); border: 1px solid var(--border); }
+            .icon-nav a, .icon-nav button { display: grid; place-items: center; width: 36px; height: 36px; border: 0; border-radius: 8px; background: transparent; color: var(--muted); text-decoration: none; cursor: pointer; transition: background 150ms ease, color 150ms ease; font: inherit; }
+            .icon-nav a svg, .icon-nav button svg { width: 16px; height: 16px; }
+            .icon-nav a.active, .icon-nav a:hover, .icon-nav button:hover { background: var(--surface); color: var(--text); box-shadow: var(--shadow); }
+            /* Labels stay in the DOM for screen readers and mobile, but don't spill out of the 36px icon buttons on desktop */
+            .icon-nav a span, .icon-nav button span { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
+            .search-field { display: flex; align-items: center; gap: 8px; flex: 1 1 auto; max-width: 340px; height: 36px; padding: 0 12px; border-radius: 10px; background: var(--surface-muted); border: 1px solid var(--border); color: var(--muted); }
+            .search-field svg { width: 15px; height: 15px; flex: 0 0 auto; }
+            .search-field input { border: 0; background: transparent; outline: none; color: var(--text); font-size: 12.5px; width: 100%; }
+            .search-field input::placeholder { color: var(--muted); }
+            .topbar-actions { display: flex; align-items: center; gap: 8px; margin-left: auto; }
+            .icon-button { display: grid; place-items: center; height: 34px; width: 34px; border: 1px solid var(--border); border-radius: 9px; background: var(--surface); color: var(--text); cursor: pointer; transition: background 150ms ease, transform 150ms ease; position: relative; }
+            .icon-button:hover { background: var(--surface-muted); transform: translateY(-1px); }
+            .icon-button svg { width: 15px; height: 15px; }
+            .status-dot { position: absolute; top: 5px; right: 5px; width: 7px; height: 7px; border-radius: 50%; background: var(--up); box-shadow: 0 0 0 2px var(--surface); }
+            .avatar { display: grid; place-items: center; width: 34px; height: 34px; border-radius: 50%; background: var(--ink); color: var(--bg); font-size: 11px; font-weight: 700; letter-spacing: 0.02em; font-family: var(--mono); }
+            .nav-toggle { display: none; }
+
+            /* ---------- Hero ---------- */
+            .hero { padding: 34px 0 26px; }
+            .breadcrumb { font-family: var(--mono); font-size: 11px; color: var(--muted); letter-spacing: 0.02em; }
+            .hero-head { display: flex; justify-content: space-between; align-items: flex-end; gap: 20px; flex-wrap: wrap; margin-top: 10px; }
+            .hero-number { font-size: clamp(42px, 7vw, 76px); font-weight: 800; letter-spacing: -0.03em; line-height: 1; }
+            .hero-label { margin-top: 8px; font-family: var(--mono); font-size: 12px; color: var(--muted); }
+            .metric-dots { display: flex; gap: 16px; margin-top: 16px; flex-wrap: wrap; }
+            .metric-dot { display: flex; align-items: center; gap: 6px; border: 0; background: transparent; cursor: pointer; padding: 0; color: var(--muted); font-family: var(--mono); font-size: 11.5px; }
+            .metric-dot::before { content: ''; width: 8px; height: 8px; border-radius: 50%; background: var(--border); }
+            .metric-dot.active { color: var(--text); }
+            .metric-dot.active::before { background: var(--up); }
+            .range-control { display: inline-flex; gap: 2px; padding: 3px; border: 1px solid var(--border); border-radius: 10px; background: var(--surface-muted); flex: 0 0 auto; }
+            .range-button { height: 30px; padding: 0 11px; border: 0; border-radius: 7px; background: transparent; color: var(--muted); cursor: pointer; font: inherit; font-size: 11px; font-weight: 700; }
+            .range-button:hover, .range-button.active { background: var(--surface); color: var(--text); box-shadow: var(--shadow); }
+
+            /* ---------- Chart card ---------- */
+            .chart-card { position: relative; margin-top: 24px; background: var(--surface); border: 1px solid var(--border); border-radius: 16px; padding: 20px; box-shadow: var(--shadow); min-height: 380px; }
+            .chart-card .js-plotly-plot { min-height: 340px; }
+            .latest-callout { position: absolute; top: 18px; left: 18px; background: var(--ink); color: var(--bg); padding: 9px 13px; border-radius: 10px; font-family: var(--mono); font-size: 11px; line-height: 1.5; box-shadow: var(--shadow); z-index: 5; }
+            .latest-callout strong { display: block; font-size: 13px; font-family: var(--sans); font-weight: 700; }
+
+            /* ---------- Forecast-style card row ---------- */
+            .forecast-row { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 12px; margin-top: 18px; }
+            .forecast-card { background: var(--surface); border: 1px solid var(--border); border-radius: 14px; padding: 16px; cursor: pointer; transition: transform 150ms ease, box-shadow 150ms ease; }
+            .forecast-card:hover { transform: translateY(-2px); box-shadow: var(--shadow); }
+            .forecast-label { font-family: var(--mono); font-size: 10px; text-transform: uppercase; letter-spacing: 0.08em; color: var(--muted); }
+            .forecast-value { margin-top: 9px; font-size: 20px; font-weight: 800; letter-spacing: -0.02em; }
+            .forecast-bar-track { margin-top: 12px; height: 5px; border-radius: 3px; background: var(--surface-muted); overflow: hidden; }
+            .forecast-bar-fill { height: 100%; border-radius: 3px; background: var(--up); }
+            .forecast-note { margin-top: 10px; font-size: 11.5px; color: var(--muted); line-height: 1.5; }
+
+            /* ---------- Sheets (positions / trades) ---------- */
+            .sheet { background: var(--surface); border: 1px solid var(--border); border-radius: 16px; padding: 22px; margin-top: 16px; box-shadow: var(--shadow); }
+            .sheet-header { display: flex; justify-content: space-between; align-items: flex-start; gap: 16px; margin-bottom: 16px; flex-wrap: wrap; }
+            .sheet-header h2 { margin: 0; font-size: 16px; font-weight: 700; letter-spacing: -0.01em; }
+            .sheet-header p { margin: 5px 0 0; color: var(--muted); font-size: 12px; }
+            .ghost-button { height: 32px; padding: 0 13px; border: 1px solid var(--border); border-radius: 9px; background: var(--surface-muted); color: var(--text); cursor: pointer; font: inherit; font-size: 11.5px; font-weight: 700; }
+            .ghost-button:hover { background: var(--border); }
+
+            table.ledger { width: 100%; border-collapse: collapse; font-family: var(--mono); }
+            table.ledger th, table.ledger td { padding: 12px 10px; text-align: left; border-bottom: 1px solid var(--border); font-size: 12.5px; white-space: nowrap; }
+            table.ledger th { color: var(--muted); font-size: 10px; font-weight: 700; letter-spacing: 0.07em; text-transform: uppercase; }
+            table.ledger tr:last-child td { border-bottom: 0; }
+            table.ledger tr:hover td { background: var(--surface-muted); }
+            .ledger-empty td { color: var(--muted); text-align: center; }
+            .scroll-x { overflow-x: auto; }
+
+            .footer { margin: 30px 0 96px; text-align: center; color: var(--muted); font-size: 11px; font-family: var(--mono); }
+
+            /* ---------- Floating ask bar ---------- */
+            .ask-bar { position: fixed; left: 50%; bottom: 20px; transform: translateX(-50%); display: flex; align-items: center; gap: 6px; padding: 6px; background: var(--ink); border-radius: 999px; box-shadow: 0 16px 40px rgba(0,0,0,0.28); z-index: 30; max-width: calc(100vw - 24px); }
+            .ask-bar svg { width: 16px; height: 16px; color: var(--bg); flex: 0 0 auto; margin-left: 8px; }
+            .ask-bar input { background: transparent; border: 0; outline: none; color: var(--bg); font-size: 12.5px; padding: 0 6px; width: clamp(140px, 32vw, 260px); }
+            .ask-bar input::placeholder { color: rgba(251,251,249,0.5); }
+            :root[data-theme="dark"] .ask-bar input::placeholder { color: rgba(16,17,19,0.55); }
+            .ask-chip { display: inline-flex; align-items: center; height: 30px; padding: 0 13px; border: 0; border-radius: 999px; background: rgba(255,255,255,0.1); color: var(--bg); cursor: pointer; font-size: 11px; font-weight: 700; white-space: nowrap; }
+            .ask-chip:hover { background: rgba(255,255,255,0.18); }
+
+            /* ---------- Exposure drawer ---------- */
+            .drawer-backdrop { position: fixed; inset: 0; background: rgba(10,10,8,0.4); opacity: 0; pointer-events: none; transition: opacity 200ms ease; z-index: 49; }
+            .drawer-backdrop.open { opacity: 1; pointer-events: auto; }
+            .drawer { position: fixed; top: 0; right: 0; bottom: 0; width: min(360px, 92vw); background: var(--surface); border-left: 1px solid var(--border); z-index: 50; padding: 22px; transform: translateX(100%); transition: transform 220ms ease; overflow-y: auto; }
+            .drawer.open { transform: translateX(0); }
+            .drawer-header { display: flex; justify-content: space-between; align-items: flex-start; gap: 12px; }
+            .drawer-header h2 { margin: 0; font-size: 15px; font-weight: 700; }
+            .drawer-header p { margin: 5px 0 0; color: var(--muted); font-size: 11.5px; }
+            .drawer-close { border: 0; background: transparent; color: var(--muted); cursor: pointer; font-size: 20px; line-height: 1; }
+            .exposure-row { margin-top: 16px; }
+            .exposure-top { display: flex; justify-content: space-between; font-family: var(--mono); font-size: 12px; margin-bottom: 6px; }
+            .exposure-track { height: 8px; border-radius: 4px; background: var(--surface-muted); overflow: hidden; }
+            .exposure-fill { height: 100%; border-radius: 4px; background: var(--up); }
+            .exposure-fill.over-cap { background: var(--down); }
+            .exposure-flag { margin-top: 4px; font-size: 10.5px; color: var(--down); font-family: var(--mono); }
+            .exposure-empty { margin-top: 18px; color: var(--muted); font-size: 12px; }
+
+            /* ---------- Dialog ---------- */
+            .insight-dialog { width: min(400px, calc(100vw - 32px)); border: 1px solid var(--border); border-radius: 14px; padding: 0; background: var(--surface); color: var(--text); box-shadow: var(--shadow); }
+            .insight-dialog::backdrop { background: rgba(10, 9, 7, 0.4); backdrop-filter: blur(3px); }
+            .dialog-inner { padding: 22px; }
+            .dialog-header { display: flex; align-items: flex-start; justify-content: space-between; gap: 16px; }
+            .dialog-header h2 { margin: 0; font-size: 15px; font-weight: 700; }
+            .dialog-close { border: 0; background: transparent; color: var(--muted); cursor: pointer; font-size: 20px; line-height: 1; }
+            .dialog-copy { margin: 14px 0 0; color: var(--muted); font-size: 13px; line-height: 1.6; }
+
+            @media (max-width: 900px) {
+                .forecast-row { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+                .search-field { display: none; }
+            }
+            @media (max-width: 760px) {
+                .icon-nav { position: absolute; top: 100%; left: 16px; right: 16px; margin-top: 6px; display: none; flex-direction: column; align-items: stretch; padding: 6px; }
+                .icon-nav.open { display: flex; }
+                .icon-nav a { width: 100%; height: 38px; flex-direction: row; justify-content: flex-start; gap: 10px; padding: 0 10px; }
+                .icon-nav a span { display: inline; font-size: 12.5px; font-weight: 600; }
+                .nav-toggle { display: grid; }
+                .topbar-inner { position: relative; flex-wrap: wrap; }
+            }
+            @media (max-width: 560px) {
+                .wrap { padding: 0 16px; }
+                .topbar-inner { padding: 12px 16px; }
+                .forecast-row { grid-template-columns: 1fr 1fr; }
+                .ask-bar { width: calc(100vw - 24px); }
+                .ask-bar input { width: 100%; }
+            }
+            @media (prefers-reduced-motion: reduce) { *, *::before, *::after { scroll-behavior: auto !important; transition-duration: 0.01ms !important; } }
+        </style>
+    </head>
+    <body>
+        <header class="topbar">
+            <div class="topbar-inner">
+                <a class="brand" href="#overview">
+                    <span class="brand-mark" aria-hidden="true">
+                        <svg viewBox="0 0 24 24" fill="none"><path d="M4 17 8.5 7l3.3 6 2.6-4 2.9 8" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="2.2"/></svg>
+                    </span>
+                    <span class="brand-name">IrieTrade</span>
+                </a>
+                <nav class="icon-nav" id="icon-nav" aria-label="Dashboard navigation">
+                    <a class="active" href="#overview" title="Overview"><svg viewBox="0 0 24 24" fill="none"><rect x="4" y="4" width="7" height="7" rx="1.5" stroke="currentColor" stroke-width="1.7"/><rect x="13" y="4" width="7" height="7" rx="1.5" stroke="currentColor" stroke-width="1.7"/><rect x="4" y="13" width="7" height="7" rx="1.5" stroke="currentColor" stroke-width="1.7"/><rect x="13" y="13" width="7" height="7" rx="1.5" stroke="currentColor" stroke-width="1.7"/></svg><span>Overview</span></a>
+                    <a href="#positions" title="Portfolio"><svg viewBox="0 0 24 24" fill="none"><path d="M5 19V9m7 10V5m7 14v-7" stroke="currentColor" stroke-linecap="round" stroke-width="1.7"/></svg><span>Portfolio</span></a>
+                    <a href="#alerts" title="Ledger"><svg viewBox="0 0 24 24" fill="none"><path d="M6 4h9l3 3v13a1 1 0 0 1-1 1H6a1 1 0 0 1-1-1V5a1 1 0 0 1 1-1Z" stroke="currentColor" stroke-width="1.7"/><path d="M8 10h8M8 14h8M8 18h5" stroke="currentColor" stroke-linecap="round" stroke-width="1.6"/></svg><span>Ledger</span></a>
+                    <a href="/setup" title="Settings"><svg viewBox="0 0 24 24" fill="none" aria-hidden="true"><path d="M12 4v1a1 1 0 0 1-1 1H7a2 2 0 0 0-2 2v1a1 1 0 0 1-2 0v-1a2 2 0 0 0-2-2H5a1 1 0 0 1 0-2h1a1 1 0 0 1 1-1V7a1 1 0 0 1 1-1h1a2 2 0 0 0 2-2V4a1 1 0 0 1 2 0v1a2 2 0 0 0 2 2h1a1 1 0 0 1 1 1V5a1 1 0 0 1 1-1h1a2 2 0 0 0 2 2v1a1 1 0 0 1 2 0v-1a2 2 0 0 0 2-2h1a1 1 0 0 1 1 1v1a1 1 0 0 1 1 1h1a2 2 0 0 0 2 2v1a1 1 0 0 1 2 0v-1a2 2 0 0 0-2-2h1a1 1 0 0 1 1-1v-1a1 1 0 0 1 1-1h1a2 2 0 0 0 2-2V7a1 1 0 0 1-1-1h-1a2 2 0 0 0-2-2V4a1 1 0 0 1-2 0v1a2 2 0 0 0-2-2H13a1 1 0 0 1 0 2h-1a1 1 0 0 1-1 1v1zm0-10a5 5 0 1 0 0 10 5 5 0 0 0 0-10z" stroke="currentColor" stroke-width="1.7"/></svg><span>Settings</span></a>
+                </nav>
+                <div class="search-field">
+                    <svg viewBox="0 0 24 24" fill="none" aria-hidden="true"><circle cx="11" cy="11" r="6.5" stroke="currentColor" stroke-width="1.8"/><path d="m20 20-3.6-3.6" stroke="currentColor" stroke-linecap="round" stroke-width="1.8"/></svg>
+                    <input id="symbol-filter" type="text" placeholder="Filter positions by symbol" aria-label="Filter positions by symbol">
+                </div>
+                <div class="topbar-actions">
+                    <button class="icon-button" id="refresh-button" type="button" title="Refresh now" aria-label="Refresh dashboard now">
+                        <svg viewBox="0 0 24 24" fill="none" aria-hidden="true"><path d="M20 11a8 8 0 0 0-14.7-4L4 9m0 0V4m0 5h5M4 13a8 8 0 0 0 14.7 4L20 15m0 0v5m0-5h-5" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="1.8"/></svg>
+                    </button>
+                    <button class="icon-button" id="theme-toggle" type="button" title="Switch theme" aria-label="Switch color theme">
+                        <svg viewBox="0 0 24 24" fill="none" aria-hidden="true"><path d="M12 3v2m0 14v2M4.2 4.2l1.4 1.4m12.8 12.8 1.4 1.4M3 12h2m14 0h2M4.2 19.8l1.4-1.4M18.4 5.6l1.4-1.4" stroke="currentColor" stroke-linecap="round" stroke-width="1.6"/><circle cx="12" cy="12" r="4" stroke="currentColor" stroke-width="1.6"/></svg>
+                    </button>
+                    <button class="icon-button" title="{{BOT_STATUS}}" aria-label="Bot status: {{BOT_STATUS}}">
+                        <svg viewBox="0 0 24 24" fill="none" aria-hidden="true"><rect x="3" y="6" width="18" height="12" rx="2" stroke="currentColor" stroke-width="1.6"/><path d="M7 8v4M7 12v4M11 8v4M11 12v4M15 8v4M15 12v4" stroke="currentColor" stroke-width="1.6" stroke-linecap="square"/></svg>
+                        <span class="status-dot" style="background-color: {{STATUS_COLOR}};"></span>
+                    </button>
+                    <div class="avatar" title="{{BOT_STATUS}}">IT</div>
+                    <button class="icon-button nav-toggle" id="nav-toggle" type="button" aria-label="Open navigation" aria-expanded="false" aria-controls="icon-nav">
+                        <svg viewBox="0 0 24 24" fill="none" aria-hidden="true"><path d="M4 7h16M4 12h16M4 17h16" stroke="currentColor" stroke-linecap="round" stroke-width="1.8"/></svg>
+                    </button>
+                </div>
+            </div>
+        </header>
+
+        <section class="hero wrap" id="overview">
+            <div class="breadcrumb">IrieTrade / Overview</div>
+            <div class="hero-head">
+                <div>
+                    <div class="hero-number" id="hero-number">{{NAV}}</div>
+                    <div class="hero-label" id="hero-label">Net asset value - updates hourly, read-only</div>
+                    <div class="metric-dots">
+                        <button class="metric-dot active" type="button" data-value="{{NAV}}" data-label="Net asset value - updates hourly, read-only" data-sign="neutral">NAV</button>
+                        <button class="metric-dot" type="button" data-value="{{DAILY_PNL}}" data-label="Daily P&amp;L, {{DAILY_PCT}} change today" data-sign="{{DAILY_SIGN}}">Daily P&amp;L</button>
+                        <button class="metric-dot" type="button" data-value="{{UNREALIZED_PNL}}" data-label="Unrealised P&amp;L, mark-to-market" data-sign="{{UNREALIZED_SIGN}}">Unrealised</button>
+                        <button class="metric-dot" type="button" data-value="{{TOTAL_RETURN}}" data-label="Total return since first tracked NAV point" data-sign="{{RETURN_SIGN}}">Total return</button>
+                    </div>
+                </div>
+                <div class="range-control" role="group" aria-label="Chart time range">
+                    <button class="range-button" data-range="7" type="button">Week</button>
+                    <button class="range-button active" data-range="30" type="button">Month</button>
+                    <button class="range-button" data-range="90" type="button">Quarter</button>
+                    <button class="range-button" data-range="365" type="button">Year</button>
+                    <button class="range-button" data-range="all" type="button">All</button>
+                </div>
+            </div>
+            <div class="chart-card">
+                <div class="latest-callout">
+                    Latest
+                    <strong>{{NAV}}</strong>
+                    {{LAST_UPDATED}}
+                </div>
+                {{PLOT_HTML}}
+            </div>
+        </section>
+
+        <section class="wrap forecast-row">
+            <div class="forecast-card" tabindex="0" data-metric="Unrealised P&amp;L" data-detail="The mark-to-market profit or loss calculated from the latest prices and open positions.">
+                <div class="forecast-label">Unrealised P&amp;L</div>
+                <div class="forecast-value {{UNREALIZED_SIGN}}">{{UNREALIZED_PNL}}</div>
+                <div class="forecast-note">Mark-to-market</div>
+            </div>
+            <div class="forecast-card" tabindex="0" data-metric="Trading P&amp;L" data-detail="Unrealised plus realised trading performance, excluding interest and dividend effects.">
+                <div class="forecast-label">Trading P&amp;L (U+R)</div>
+                <div class="forecast-value {{TRADING_SIGN}}">{{TRADING_PNL}}</div>
+                <div class="forecast-note">Excludes interest &amp; dividends</div>
+            </div>
+            <div class="forecast-card" tabindex="0" data-metric="30-Day Rolling Sharpe" data-detail="A 30-day annualised risk-adjusted return estimate, shown once enough NAV history is available.">
+                <div class="forecast-label">Rolling Sharpe</div>
+                <div class="forecast-value {{SHARPE_SIGN}}">{{SHARPE}}</div>
+                <div class="forecast-note">30-day, annualised</div>
+            </div>
+            <div class="forecast-card" tabindex="0" data-metric="Portfolio Heat" data-detail="Open risk as a percentage of current capital, based on your stated exposure limits.">
+                <div class="forecast-label">Portfolio heat</div>
+                <div class="forecast-value">{{PORTFOLIO_HEAT}}</div>
+                <div class="forecast-bar-track"><div class="forecast-bar-fill" style="width:{{HEAT_WIDTH}}%;background-color:{{HEAT_COLOR}};"></div></div>
+                <div class="forecast-note">Open risk vs capital</div>
+            </div>
+        </section>
+
+        <main class="wrap">
+            <section class="sheet" id="positions">
+                <div class="sheet-header">
+                    <div>
+                        <h2>Open positions</h2>
+                        <p>Current portfolio exposure, position by position.</p>
+                    </div>
+                    <button class="ghost-button" id="open-exposure" type="button">View exposure</button>
+                </div>
+                <div class="scroll-x">
+                    <table class="ledger" id="positions-table">
+                        <thead>
+                            <tr>
+                                <th>Symbol</th>
+                                <th>Side</th>
+                                <th>Qty</th>
+                                <th>Entry</th>
+                                <th>Stop</th>
+                                <th>Current</th>
+                                <th>U-P&amp;L</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            {{POSITION_ROWS}}
+                        </tbody>
+                    </table>
+                </div>
+            </section>
+
+            <section class="sheet" id="alerts">
+                <div class="sheet-header">
+                    <div>
+                        <h2>Trading Ledger</h2>
+                        <p>Each row shows a trade: date, action (buy/sell), reference tag, and running account balance.</p>
+                    </div>
+                </div>
+                <div class="scroll-x">
+                    <table class="ledger" id="ledger-table">
+                        <thead>
+                            <tr>
+                                <th>Date</th>
+                                <th>Description</th>
+                                <th>Ref</th>
+                                <th>Balance</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            {{LEDGER_ROWS}}
+                        </tbody>
+                    </table>
+                </div>
+            </section>
+
+            <div class="footer">© 2026 IrieTrade — data updates hourly — this dashboard is read-only and does not touch live execution.</div>
+        </main>
+
+        <div class="drawer-backdrop" id="drawer-backdrop"></div>
+        <aside class="drawer" id="exposure-drawer" aria-hidden="true">
+            <div class="drawer-header">
+                <div>
+                    <h2>Exposure by symbol</h2>
+                    <p>Share of total position value, computed from the table on the left.</p>
+                </div>
+                <button class="drawer-close" id="drawer-close" type="button" aria-label="Close exposure panel">&times;</button>
+            </div>
+            <div id="exposure-body"></div>
+        </aside>
+
+        <div class="ask-bar">
+            <svg viewBox="0 0 24 24" fill="none" aria-hidden="true"><path d="M12 3l1.8 5.2L19 10l-5.2 1.8L12 17l-1.8-5.2L5 10l5.2-1.8L12 3Z" stroke="currentColor" stroke-width="1.4" stroke-linejoin="round"/></svg>
+            <input type="text" placeholder="Ask anything or jump to a section" id="ask-input" aria-label="Jump to a dashboard section">
+            <button class="ask-chip" data-jump="#positions" type="button">Portfolio</button>
+            <button class="ask-chip" data-jump="#alerts" type="button">Ledger</button>
+        </div>
+
+        <dialog class="insight-dialog" id="insight-dialog">
+            <div class="dialog-inner">
+                <div class="dialog-header">
+                    <h2 id="dialog-title">Metric detail</h2>
+                    <button class="dialog-close" type="button" aria-label="Close metric detail">&times;</button>
+                </div>
+                <p class="dialog-copy" id="dialog-copy"></p>
+            </div>
+        </dialog>
+
+        <script>
+            const root = document.documentElement;
+
+            // Theme toggle
+            const themeToggle = document.getElementById('theme-toggle');
+            const savedTheme = localStorage.getItem('irietrade-theme');
+            const preferredTheme = savedTheme || (window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light');
+            function applyTheme(theme) {
+                if (theme === 'dark') { root.dataset.theme = 'dark'; } else { delete root.dataset.theme; }
+                themeToggle.setAttribute('aria-label', theme === 'dark' ? 'Switch to light mode' : 'Switch to dark mode');
+                localStorage.setItem('irietrade-theme', theme);
+            }
+            applyTheme(preferredTheme);
+            themeToggle.addEventListener('click', () => applyTheme(root.dataset.theme === 'dark' ? 'light' : 'dark'));
+
+            // Mobile nav — opens AND closes; the toggle button is never hidden by its own state
+            const iconNav = document.getElementById('icon-nav');
+            const navToggle = document.getElementById('nav-toggle');
+            navToggle.addEventListener('click', () => {
+                const isOpen = iconNav.classList.toggle('open');
+                navToggle.setAttribute('aria-expanded', String(isOpen));
+                navToggle.setAttribute('aria-label', isOpen ? 'Close navigation' : 'Open navigation');
+            });
+            iconNav.querySelectorAll('a').forEach((link) => {
+                link.addEventListener('click', () => {
+                    iconNav.classList.remove('open');
+                    navToggle.setAttribute('aria-expanded', 'false');
+                    navToggle.setAttribute('aria-label', 'Open navigation');
+                });
+            });
+
+            // Metric dots swap the hero figure — values come from data-* attributes rendered server-side
+            document.querySelectorAll('.metric-dot').forEach((dot) => {
+                dot.addEventListener('click', () => {
+                    document.querySelectorAll('.metric-dot').forEach((d) => d.classList.remove('active'));
+                    dot.classList.add('active');
+                    const heroNumber = document.getElementById('hero-number');
+                    heroNumber.textContent = dot.dataset.value;
+                    heroNumber.classList.remove('up', 'down');
+                    if (dot.dataset.sign === 'up' || dot.dataset.sign === 'down') heroNumber.classList.add(dot.dataset.sign);
+                    document.getElementById('hero-label').innerHTML = dot.dataset.label;
+                });
+            });
+
+            // Metric detail dialog (shared by forecast cards)
+            const insightDialog = document.getElementById('insight-dialog');
+            const dialogTitle = document.getElementById('dialog-title');
+            const dialogCopy = document.getElementById('dialog-copy');
+            document.querySelectorAll('.forecast-card[data-metric]').forEach((card) => {
+                const openDialog = () => {
+                    dialogTitle.textContent = card.dataset.metric;
+                    dialogCopy.textContent = card.dataset.detail;
+                    insightDialog.showModal();
+                };
+                card.addEventListener('click', openDialog);
+                card.addEventListener('keydown', (event) => {
+                    if (event.key === 'Enter' || event.key === ' ') { event.preventDefault(); openDialog(); }
+                });
+            });
+            insightDialog.querySelector('.dialog-close').addEventListener('click', () => insightDialog.close());
+            insightDialog.addEventListener('click', (event) => { if (event.target === insightDialog) insightDialog.close(); });
+
+            // Refresh
+            document.getElementById('refresh-button').addEventListener('click', (event) => {
+                event.currentTarget.style.opacity = '0.5';
+                window.location.reload();
+            });
+
+            // Ask bar quick jumps
+            document.querySelectorAll('.ask-chip[data-jump]').forEach((chip) => {
+                chip.addEventListener('click', () => {
+                    document.querySelector(chip.dataset.jump)?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+                });
+            });
+            document.getElementById('ask-input').addEventListener('keydown', async (event) => {
+                if (event.key !== 'Enter') return;
+                const input = event.currentTarget;
+                const question = input.value.trim();
+                const term = question.toLowerCase();
+                if (!question) return;
+                if (term.includes('ledger') || term.includes('trade')) {
+                    document.getElementById('alerts').scrollIntoView({ behavior: 'smooth' });
+                    return;
+                }
+                if (term.includes('position') || term.includes('portfolio')) {
+                    document.getElementById('positions').scrollIntoView({ behavior: 'smooth' });
+                    return;
+                }
+                input.disabled = true;
+                try {
+                    const response = await fetch('/api/assistant', {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({ question })
+                    });
+                    const result = await response.json();
+                    dialogTitle.textContent = 'IrieTrade assistant';
+                    dialogCopy.textContent = result.answer || result.error || 'No assistant response.';
+                    insightDialog.showModal();
+                } catch (error) {
+                    dialogTitle.textContent = 'IrieTrade assistant';
+                    dialogCopy.textContent = 'The assistant request failed. Check the API configuration and try again.';
+                    insightDialog.showModal();
+                } finally {
+                    input.disabled = false;
+                }
+            });
+
+            // Symbol filter on the positions table
+            const symbolFilter = document.getElementById('symbol-filter');
+            const positionsBody = document.querySelector('#positions-table tbody');
+            symbolFilter.addEventListener('input', () => {
+                const term = symbolFilter.value.trim().toUpperCase();
+                [...positionsBody.rows].forEach((row) => {
+                    if (row.classList.contains('ledger-empty')) return;
+                    const symbol = (row.cells[0]?.textContent || '').toUpperCase();
+                    row.style.display = symbol.includes(term) ? '' : 'none';
+                });
+            });
+
+            // Exposure drawer — parsed live from the positions table, flags shares over your 20% concentration cap
+            const drawer = document.getElementById('exposure-drawer');
+            const backdrop = document.getElementById('drawer-backdrop');
+            const exposureBody = document.getElementById('exposure-body');
+            const CONCENTRATION_CAP = 20;
+
+            function parseNumber(text) {
+                if (!text) return NaN;
+                const cleaned = text.replace(/[^0-9.\-]/g, '');
+                return cleaned ? parseFloat(cleaned) : NaN;
+            }
+
+            function buildExposure() {
+                const rows = [...positionsBody.rows].filter((row) => !row.classList.contains('ledger-empty'));
+                const items = rows.map((row) => {
+                    const symbol = row.cells[0]?.textContent.trim() || '—';
+                    const qty = Math.abs(parseNumber(row.cells[2]?.textContent));
+                    const current = parseNumber(row.cells[5]?.textContent);
+                    const notional = (Number.isFinite(qty) && Number.isFinite(current)) ? qty * current : NaN;
+                    return { symbol, notional };
+                }).filter((item) => Number.isFinite(item.notional) && item.notional > 0);
+
+                if (!items.length) {
+                    exposureBody.innerHTML = '<div class="exposure-empty">Not enough numeric price/quantity data in the positions table to compute exposure shares.</div>';
+                    return;
+                }
+                const total = items.reduce((sum, item) => sum + item.notional, 0);
+                items.sort((a, b) => b.notional - a.notional);
+                exposureBody.innerHTML = items.map((item) => {
+                    const pct = (item.notional / total) * 100;
+                    const overCap = pct > CONCENTRATION_CAP;
+                    return `
+                        <div class="exposure-row">
+                            <div class="exposure-top"><span>${item.symbol}</span><span>${pct.toFixed(1)}%</span></div>
+                            <div class="exposure-track"><div class="exposure-fill ${overCap ? 'over-cap' : ''}" style="width:${Math.min(pct, 100).toFixed(1)}%"></div></div>
+                            ${overCap ? `<div class="exposure-flag">Over your ${CONCENTRATION_CAP}% concentration cap</div>` : ''}
+                        </div>
+                    `;
+                }).join('');
+            }
+
+            function openDrawer() {
+                buildExposure();
+                drawer.classList.add('open');
+                backdrop.classList.add('open');
+                drawer.setAttribute('aria-hidden', 'false');
+            }
+            function closeDrawer() {
+                drawer.classList.remove('open');
+                backdrop.classList.remove('open');
+                drawer.setAttribute('aria-hidden', 'true');
+            }
+            document.getElementById('open-exposure').addEventListener('click', openDrawer);
+            document.getElementById('drawer-close').addEventListener('click', closeDrawer);
+            backdrop.addEventListener('click', closeDrawer);
+            document.addEventListener('keydown', (event) => { if (event.key === 'Escape') closeDrawer(); });
+
+            // Range buttons drive the Plotly chart
+            const chart = document.querySelector('.js-plotly-plot');
+            document.querySelectorAll('.range-button').forEach((button) => {
+                button.addEventListener('click', () => {
+                    document.querySelectorAll('.range-button').forEach((item) => item.classList.remove('active'));
+                    button.classList.add('active');
+                    if (!chart || !window.Plotly) return;
+                    if (button.dataset.range === 'all') { Plotly.relayout(chart, {'xaxis.autorange': true}); return; }
+                    const end = new Date();
+                    const start = new Date(end);
+                    start.setDate(end.getDate() - Number(button.dataset.range));
+                    Plotly.relayout(chart, {'xaxis.autorange': false, 'xaxis.range': [start, end]});
+                });
+            });
+
+            fetch('/api/first-run')
+                .then(r => r.json())
+                .then(data => {
+                    if (data.first_run) {
+                        const toast = document.createElement('div');
+                        toast.style.cssText = 'position:fixed;bottom:90px;right:20px;background:var(--surface);border:1px solid var(--border);color:var(--text);padding:18px 22px;border-radius:14px;box-shadow:0 12px 32px rgba(0,0,0,0.18);z-index:9999;font-size:13px;line-height:1.6;max-width:300px;';
+                        toast.innerHTML = `
+                            <strong>Welcome to IrieTrade</strong><br><br>
+                            ⭐ <a href="https://github.com/Native-254/IrieTrade" target="_blank" style="color:var(--up);">Star the repo</a><br>
+                            💬 <a href="https://github.com/Native-254/IrieTrade/discussions" target="_blank" style="color:var(--up);">Join discussions</a><br>
+                            ✉️ <a href="mailto:info.native@gmail.com" style="color:var(--up);">Send a suggestion</a><br><br>
+                            <button onclick="this.parentElement.remove()" style="background:var(--surface-muted);color:var(--text);border:1px solid var(--border);padding:6px 14px;border-radius:8px;cursor:pointer;">Got it</button>
+                        `;
+                        document.body.appendChild(toast);
+                    }
+                });
+        </script>
+    </body>

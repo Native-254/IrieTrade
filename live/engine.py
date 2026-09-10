@@ -465,7 +465,7 @@ class TradingEngine:
             use_bracket = getattr(broker, "supports_bracket", True)
 
             if use_bracket:
-                stop_loss_slipped = self._apply_slippage(
+                stop_loss = self._apply_slippage(
                     stop_loss, "SELL" if action == "BUY" else "BUY_TO_COVER"
                 )
                 tp_price = (
@@ -480,7 +480,7 @@ class TradingEngine:
                             symbol,
                             filled_qty,
                             slipped_price,
-                            stop_loss_slipped,
+                            stop_loss,
                             tp_price,
                         )
                     else:
@@ -488,7 +488,7 @@ class TradingEngine:
                             symbol,
                             filled_qty,
                             slipped_price,
-                            stop_loss_slipped,
+                            stop_loss,
                             tp_price,
                         )
                     if not order_id:
@@ -524,12 +524,23 @@ class TradingEngine:
                             side="BUY" if action == "BUY" else "SELL",
                             quantity=filled_qty,
                             entry_price=net_entry_price,
-                            stop_loss=stop_loss_slipped,
+                            stop_loss=stop_loss,
                             stop_order_id=safe_stop_id,
                             entry_time=datetime.now(timezone.utc),
                         )
                     )
                     self.email.send_trade_alert(symbol, action, filled_qty, avg_price)
+                    # Add telegram channel post after successful entry
+                    broker_label = self._get_broker_source(broker)
+                    direction = "🟢 BUY" if action == "BUY" else "🔴 SELL SHORT"
+                    self.telegram.send_channel_signal(
+                        f"<b>{direction} — {symbol}</b>\n"
+                        f"Exchange: <code>{broker_label}</code>\n"
+                        f"Quantity: <code>{filled_qty}</code>\n"
+                        f"Entry: <code>${avg_price:,.4f}</code>\n"
+                        f"Stop: <code>${stop_loss:,.4f}</code>\n"
+                        f"<i>Not financial advice.</i>"
+                    )
                     log.success(
                         f"Filled {action} {filled_qty} {symbol} @ ${avg_price:.2f} (bracket)"
                     )
@@ -592,6 +603,17 @@ class TradingEngine:
                         )
                     )
                     self.email.send_trade_alert(symbol, action, filled_qty, avg_price)
+                    # Add telegram channel post after successful entry
+                    broker_label = self._get_broker_source(broker)
+                    direction = "🟢 BUY" if action == "BUY" else "🔴 SELL SHORT"
+                    self.telegram.send_channel_signal(
+                        f"<b>{direction} — {symbol}</b>\n"
+                        f"Exchange: <code>{broker_label}</code>\n"
+                        f"Quantity: <code>{filled_qty}</code>\n"
+                        f"Entry: <code>${avg_price:,.4f}</code>\n"
+                        f"Stop: <code>${stop_loss:,.4f}</code>\n"
+                        f"<i>Not financial advice.</i>"
+                    )
                     log.success(
                         f"Filled {action} {filled_qty} {symbol} @ ${avg_price:.2f} (plain)"
                     )
@@ -709,6 +731,17 @@ class TradingEngine:
                     )
 
                 self.email.send_trade_alert(symbol, action, filled_qty, avg_price)
+                # Add telegram channel post after successful exit
+                broker_label = self._get_broker_source(broker)
+                direction = "🔵 CLOSE LONG" if action == "SELL" else "🟣 COVER SHORT"
+                self.telegram.send_channel_signal(
+                    f"<b>{direction} — {symbol}</b>\n"
+                    f"Exchange: <code>{broker_label}</code>\n"
+                    f"Quantity: <code>{filled_qty}</code>\n"
+                    f"Exit: <code>${avg_price:,.4f}</code>\n"
+                    f"P&L: <code>{pnl_frac:+.2%}</code>\n"
+                    f"<i>Not financial advice.</i>"
+                )
                 log.success(
                     f"Closed {action} {filled_qty} {symbol} @ ${avg_price:.2f}, P&L {pnl_frac:.4%}"
                 )
@@ -858,7 +891,7 @@ class TradingEngine:
                 self._place_trade(broker, pm, sym, side, pos.quantity, price, 0.0, 0.0, 0.0)
 
     def _apply_dynamic_exits(
-        self, broker, pm, latest_prices: dict, capital: float
+        self, broker, pm, latest_prices: dict
     ):
         """Close positions based on time held and unrealized loss."""
         rotation_cfg = self.config.get("rotation", {})
@@ -1026,7 +1059,7 @@ class TradingEngine:
                 self._rotate_underperformers(
                     broker, pm, latest_prices, self.symbols_by_broker[broker_name]
                 )
-                self._apply_dynamic_exits(broker, pm, latest_prices, capital)
+                self._apply_dynamic_exits(broker, pm, latest_prices)
 
             # ──────────── Signal generation (per‑broker strategies) ────────────
             symbols = list(
