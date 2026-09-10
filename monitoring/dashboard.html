@@ -93,8 +93,6 @@
             /* ---------- Chart card ---------- */
             .chart-card { position: relative; margin-top: 24px; background: var(--surface); border: 1px solid var(--border); border-radius: 16px; padding: 20px; box-shadow: var(--shadow); min-height: 380px; }
             .chart-card .js-plotly-plot { min-height: 340px; }
-            .latest-callout { position: absolute; top: 18px; left: 18px; background: var(--ink); color: var(--bg); padding: 9px 13px; border-radius: 10px; font-family: var(--mono); font-size: 11px; line-height: 1.5; box-shadow: var(--shadow); z-index: 5; }
-            .latest-callout strong { display: block; font-size: 13px; font-family: var(--sans); font-weight: 700; }
 
             /* ---------- Forecast-style card row ---------- */
             .forecast-row { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 12px; margin-top: 18px; }
@@ -241,11 +239,6 @@
                 </div>
             </div>
             <div class="chart-card">
-                <div class="latest-callout">
-                    Latest
-                    <strong>{{NAV}}</strong>
-                    {{LAST_UPDATED}}
-                </div>
                 {{PLOT_HTML}}
             </div>
         </section>
@@ -320,9 +313,6 @@
                                 <th>Balance</th>
                             </tr>
                         </thead>
-                        <tbody>
-                            {{LEDGER_ROWS}}
-                        </tbody>
                     </table>
                 </div>
             </section>
