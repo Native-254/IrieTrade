@@ -220,6 +220,24 @@ class TradingEngine:
             return "ib"
         if name == "KucoinBroker":
             return "kucoin"
+        if name == "BinanceBroker":
+            return "binance"
+        if name == "CoinbaseBroker":
+            return "coinbase"
+        if name == "DerivBroker":
+            return "deriv"
+        if name == "KrakenBroker":
+            return "kraken"
+        if name == "NSEBroker":
+            return "nse"
+        if name == "OKXBroker":
+            return "okx"
+        if name == "OlymptradeBroker":
+            return "olymptrade"
+        if name == "OneInchBroker":
+            return "oneinch"
+        if name == "Web3DexBroker":
+            return "web3dex"
         return "general"
 
     # ------------------------------------------------------------------
@@ -515,6 +533,7 @@ class TradingEngine:
                         else avg_price - (commission / filled_qty)
                     )
                     safe_stop_id = stop_id if stop_id is not None else 0
+                    broker_label = self._get_broker_source(broker)
 
                     pm.open_position(
                         Position(
@@ -527,8 +546,7 @@ class TradingEngine:
                             entry_time=datetime.now(timezone.utc),
                         )
                     )
-                    self.email.send_trade_alert(symbol, action, filled_qty, avg_price)
-                    broker_label = self._get_broker_source(broker)
+                    self.email.send_trade_alert(symbol, action, filled_qty, avg_price, source=broker_label)
                     direction_emoji = "🟢" if action == "BUY" else "🔴"
                     direction_text = "BUY" if action == "BUY" else "SELL SHORT"
                     strategy_display = strategy_name if strategy_name is not None else "Unknown"
@@ -594,6 +612,7 @@ class TradingEngine:
                         if action == "BUY"
                         else avg_price - (commission / filled_qty)
                     )
+                    broker_label = self._get_broker_source(broker)
 
                     pm.open_position(
                         Position(
@@ -606,9 +625,8 @@ class TradingEngine:
                             entry_time=datetime.now(timezone.utc),
                         )
                     )
-                    self.email.send_trade_alert(symbol, action, filled_qty, avg_price)
+                    self.email.send_trade_alert(symbol, action, filled_qty, avg_price, source=broker_label)
                     # Add telegram channel post after successful entry
-                    broker_label = self._get_broker_source(broker)
                     direction = "🟢 BUY" if action == "BUY" else "🔴 SELL SHORT"
                     self.telegram.send_channel_signal(
                         f"<b>{direction} — {symbol}</b>\n"
@@ -733,9 +751,9 @@ class TradingEngine:
                         f"Set cooldown for {symbol} until {cooldown_until.isoformat()} "
                         f"after losing trade ({pnl_frac:.2%})."
                     )
+                    broker_label = self._get_broker_source(broker)
 
-                self.email.send_trade_alert(symbol, action, filled_qty, avg_price)
-                broker_label = self._get_broker_source(broker)
+                self.email.send_trade_alert(symbol, action, filled_qty, avg_price, source=broker_label)
                 if action == "SELL":
                     direction_emoji = "🔵"
                     direction_text = "CLOSED"
@@ -1199,6 +1217,17 @@ class TradingEngine:
                     f"Resolved {symbol} ({broker_name}): {reasons} -> {action} (current side={current_side})"
                 )
 
+                # Filter reasons to only include relevant signals for strategy display
+                if action in ("BUY", "SELL_SHORT"):
+                    # Entry actions: show ENTER signals
+                    strategy_reasons = [r for r in reasons if r.startswith("ENTER_")]
+                elif action in ("SELL", "BUY_TO_COVER"):
+                    # Exit actions: show EXIT signals
+                    strategy_reasons = [r for r in reasons if r.startswith("EXIT_")]
+                else:
+                    # Fallback: use all reasons
+                    strategy_reasons = reasons
+
                 if action in ("SELL", "BUY_TO_COVER"):
                     if not pos:
                         log.warning(
@@ -1206,7 +1235,7 @@ class TradingEngine:
                         )
                         continue
                     quantity = pos.quantity
-                    strategy_display = reasons[0] if reasons else "Signal"
+                    strategy_display = strategy_reasons[0] if strategy_reasons else "Signal"
                     success = self._place_trade(
                         broker,
                         pm,

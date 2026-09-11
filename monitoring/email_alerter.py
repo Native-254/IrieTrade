@@ -8,9 +8,7 @@ from utils.logger import log
 class EmailAlerter:
     # Fixed thread IDs used for grouping in the recipient's email client
     THREAD_TRADES = "irietrade-trades@irietrade.me"
-    THREAD_ERRORS_IB = "irietrade-errors-ib@irietrade.me"
-    THREAD_ERRORS_KUCOIN = "irietrade-errors-kucoin@irietrade.me"
-    THREAD_ERRORS_GENERAL = "irietrade-errors-general@irietrade.me"
+    THREAD_ERRORS = "irietrade-errors@irietrade.me"  # Single thread for all errors
 
     def __init__(self):
         self.sender = os.getenv("EMAIL_SENDER")
@@ -68,8 +66,9 @@ class EmailAlerter:
         </p>
         """
 
-    def send_trade_alert(self, symbol: str, action: str, quantity: int, price: float):
-        subject = f"[IrieTrade Trades] {action} {quantity} {symbol} @ ${price:,.2f}"
+    def send_trade_alert(self, symbol: str, action: str, quantity: int, price: float, source: str = ""):
+        source_text = f" ({source})" if source else ""
+        subject = f"[IrieTrade Trades] {action} {quantity} {symbol} @ ${price:,.2f}{source_text}"
         action_color = "#00b894" if action in ("BUY", "BUY_TO_COVER") else "#e17055"
         body = f"""
         <html>
@@ -85,7 +84,7 @@ class EmailAlerter:
                 </tr>
                 <tr>
                     <td style="padding: 10px; border-bottom: 1px solid #2d3436;"><strong>Action</strong></td>
-                    <td style="padding: 10px; border-bottom: 1px solid #2d3436; color: {action_color};">{action}</td>
+                    <td style="padding: 10px; border-bottom: 1px solid #2d3436; color: {action_color};">{action}{source_text}</td>
                 </tr>
                 <tr>
                     <td style="padding: 10px; border-bottom: 1px solid #2d3436;"><strong>Quantity</strong></td>
@@ -94,6 +93,10 @@ class EmailAlerter:
                 <tr>
                     <td style="padding: 10px; border-bottom: 1px solid #2d3436;"><strong>Price</strong></td>
                     <td style="padding: 10px; border-bottom: 1px solid #2d3436;">${price:,.2f}</td>
+                </tr>
+                <tr>
+                    <td style="padding: 10px; border-bottom: 1px solid #2d3436;"><strong>Platform/Source</strong></td>
+                    <td style="padding: 10px; border-bottom: 1px solid #2d3436;">{source if source else 'N/A'}</td>
                 </tr>
             </table>
             {self._build_signature()}
@@ -104,17 +107,7 @@ class EmailAlerter:
 
     def send_error_alert(self, error_msg: str, source: str = "general"):
         source = source.lower()
-        if source == "ib":
-            thread_id = self.THREAD_ERRORS_IB
-            prefix = "[IBKR]"
-        elif source == "kucoin":
-            thread_id = self.THREAD_ERRORS_KUCOIN
-            prefix = "[KuCoin]"
-        else:
-            thread_id = self.THREAD_ERRORS_GENERAL
-            prefix = "[General]"
-
-        subject = f"IrieTrade Error {prefix}"
+        subject = f"IrieTrade Error [{source.upper()}]"
         body = f"""
         <html>
         <body style="font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; background-color: #0b111a; color: #dfe6e9; padding: 20px;">
@@ -123,10 +116,11 @@ class EmailAlerter:
             </div>
             <h2 style="color: #e17055;">⚠️ An Error Occurred</h2>
             <p style="background-color: #1e1e2f; padding: 15px; border-left: 4px solid #e17055; margin: 20px 0; font-family: monospace;">
-                {error_msg}
+                <strong>Platform:</strong> {source.upper()}<br>
+                <strong>Error:</strong> {error_msg}
             </p>
             {self._build_signature()}
         </body>
         </html>
         """
-        self._send_with_thread(subject, body, thread_id)
+        self._send_with_thread(subject, body, self.THREAD_ERRORS)
