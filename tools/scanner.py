@@ -3,8 +3,9 @@
 
 from __future__ import annotations
 
-import pandas as pd
 import time
+
+import pandas as pd
 import yfinance as yf
 
 from utils.config import CONFIG
@@ -189,17 +190,6 @@ class MarketScanner:
         }
 
         tickers = exchange.fetch_tickers()
-        candidates = []
-        for sym in markets:
-            ticker = tickers.get(sym)
-            if ticker is None:
-                continue
-            base_volume = ticker.get("baseVolume", 0)
-            last_price = ticker.get("last", 0)
-            if base_volume > 0 and last_price > 0:
-                percent_change = ticker.get("percentage", 0) or 0
-                candidates.append((sym, base_volume, last_price, percent_change))
-
         # After fetching tickers and markets
         candidates = []
         min_volume = self.criteria.get("min_volume_usdt", 5_000_000)
