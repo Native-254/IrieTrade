@@ -31,19 +31,101 @@ app = FastAPI()
 trading_engine = None
 
 
-def _post_ai_request(api_url: str, api_key: str, payload: dict) -> dict:
-    request = UrlRequest(
-        api_url,
-        data=json.dumps(payload).encode("utf-8"),
-        headers={
-            "Authorization": f"Bearer {api_key}",
-            "Content-Type": "application/json",
-        },
-        method="POST",
-    )
-    with urlopen(request, timeout=20) as response:
-        return json.loads(response.read().decode("utf-8"))
 
+def _post_ai_request(api_url: str, api_key: str, payload: dict) -> dict:
+    """Make a POST request to the AI API (supports both OpenAI and Gemini formats).
+    
+    For Gemini: api_key is added as query parameter, payload format is adjusted.
+    For OpenAI: api_key is used as Bearer token, payload format is as-is.
+    """
+    
+    # Check if this is a Gemini API URL
+    is_gemini = "generativelanguage.googleapis.com" in api_url and ":generateContent" in api_url
+    
+    if is_gemini:
+        # Gemini API format
+        # Remove model from payload as it's specified in the URL
+        payload_copy = {k: v for k, v in payload.items() if k != "model"}
+        
+        # Convert OpenAI messages format to Gemini contents format
+        messages = payload_copy.pop("messages", [])
+        contents = []
+        for msg in messages:
+            if msg["role"] == "system":
+                # Prepend system message to first user message, or create a new user message
+                if contents and contents[-1]["role"] == "user":
+                    contents[-1]["parts"][0]["text"] = msg["content"] + "\n" + contents[-1]["parts"][0]["text"]
+                else:
+                    contents.append({
+                        "role": "user",
+                        "parts": [{"text": msg["content"]}]
+                    })
+            elif msg["role"] == "user":
+                contents.append({
+                    "role": "user",
+                    "parts": [{"text": msg["content"]}]
+                })
+        
+        # If no contents were created, create a default one
+        if not contents:
+            contents = [{"role": "user", "parts": [{"text": ""}]}]
+        
+        gemini_payload = {
+            "contents": contents,
+            "generationConfig": {
+                "temperature": payload_copy.get("temperature", 0.2)
+            }
+        }
+        
+        # Add API key as query parameter
+        separator = "&" if "?" in api_url else "?"
+        request_url = f"{api_url}{separator}key={api_key}"
+        
+        request = UrlRequest(
+            request_url,
+            data=json.dumps(gemini_payload).encode("utf-8"),
+            headers={
+                "Content-Type": "application/json",
+            },
+            method="POST",
+        )
+    else:
+        # OpenAI API format (default)
+        request = UrlRequest(
+            api_url,
+            data=json.dumps(payload).encode("utf-8"),
+            headers={
+                "Authorization": f"Bearer {api_key}",
+                "Content-Type": "application/json",
+            },
+            method="POST",
+        )
+    
+    with urlopen(request, timeout=20) as response:
+        response_data = json.loads(response.read().decode("utf-8"))
+        
+        # Convert response to OpenAI-like format for consistency
+        if is_gemini:
+            # Extract text from Gemini response
+            text = ""
+            if "candidates" in response_data and len(response_data["candidates"]) > 0:
+                candidate = response_data["candidates"][0]
+                if "content" in candidate and "parts" in candidate["content"]:
+                    parts = candidate["content"]["parts"]
+                    if len(parts) > 0:
+                        text = parts[0].get("text", "")
+            
+            return {
+                "choices": [{
+                    "message": {
+                        "role": "assistant",
+                        "content": text
+                    }
+                }]
+            }
+        else:
+            # Return OpenAI response as-is
+            return response_data
 
 def _dashboard_snapshot() -> dict:
     if not trading_engine:
@@ -81,14 +163,12 @@ def _dashboard_snapshot() -> dict:
         )
 
     return {
-        "status": "running" if trading_engine.is_running else "stopped",
         "nav": nav,
         "daily_pnl": daily_pnl,
-        "unrealized_pnl": unrealized_pnl,
         "open_risk": open_risk,
-        "open_positions": len(positions),
-        "recent_trades": trading_engine.trade_results[-10:],
         "positions": position_summary,
+        "unrealized_pnl": unrealized_pnl,
+        "realized_pnl": getattr(trading_engine, "realized_pnl", 0.0),
     }
 
 
