@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import pandas as pd
+import time
 import yfinance as yf
 
 from utils.config import CONFIG
@@ -199,22 +200,60 @@ class MarketScanner:
                 percent_change = ticker.get("percentage", 0) or 0
                 candidates.append((sym, base_volume, last_price, percent_change))
 
-        min_volume_usdt = self.criteria.get("min_volume_usdt", 0)
-        filtered = [
-            (sym, vol, price, chg)
-            for sym, vol, price, chg in candidates
-            if vol * price >= min_volume_usdt
-        ]
+        # After fetching tickers and markets
+        candidates = []
+        min_volume = self.criteria.get("min_volume_usdt", 5_000_000)
+        min_age_days = self.criteria.get("min_age_days", 30)
 
-        def momentum_score(item: tuple[str, float, float, float]) -> float:
-            _, vol, price, change = item
-            dollar_volume = vol * price
-            normalized_volume = dollar_volume / max(min_volume_usdt, 1.0)
-            return (abs(change) * 2.0) + (normalized_volume * 0.35)
+        for sym, mkt in markets.items():
+            ticker = tickers.get(sym)
+            if not ticker:
+                continue
 
-        filtered.sort(key=momentum_score, reverse=True)
+            last = ticker.get("last") or 0
+            base_vol = ticker.get("baseVolume") or 0
+            quote_vol = ticker.get("quoteVolume") or (base_vol * last)
+            pct_change_24h = ticker.get("percentage") or 0
+            bid = ticker.get("bid") or 0
+            ask = ticker.get("ask") or 0
 
-        top_symbols = [sym for sym, _, _, _ in filtered[: self.top_n]]
+            # 1. Liquidity floor
+            if quote_vol < min_volume:
+                continue
+
+            # 2. Spread sanity (avoid illiquid junk)
+            if bid <= 0 or ask <= 0:
+                continue
+            spread_pct = (ask - bid) / ask if ask > 0 else float('inf')
+            if spread_pct > 0.005:  # >0.5% spread = illiquid
+                continue
+
+            # 3. Minimum price (avoid meme-tier dust)
+            if last < 0.01:
+                continue
+
+            # 4. Momentum confirmation: positive 24h change and above 24h midpoint
+            if pct_change_24h <= 0:
+                continue
+            high_24h = ticker.get("high") or last
+            low_24h = ticker.get("low") or last
+            mid_24h = (high_24h + low_24h) / 2
+            if last < mid_24h:
+                continue
+
+            # 5. Age filter (skip newly listed pairs)
+            market_info = mkt.get("info", {})
+            listed_ms = market_info.get("listedAt") if isinstance(market_info, dict) else None
+            if listed_ms:
+                age_days = (time.time() * 1000 - float(listed_ms)) / (1000 * 86400)
+                if age_days < min_age_days:
+                    continue
+
+            candidates.append((sym, quote_vol, pct_change_24h, last))
+
+        # Rank by momentum × volume (both must be strong)
+        candidates.sort(key=lambda x: (x[2] * (x[1] ** 0.5)), reverse=True)
+        top_symbols = [c[0] for c in candidates[: self.top_n]]
         log.info(
             f"Crypto scanner found {len(top_symbols)} pairs: {', '.join(top_symbols[:5])}..."
         )

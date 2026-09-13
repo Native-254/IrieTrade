@@ -74,6 +74,35 @@ class BacktestEngine:
 
         self.trailing_stop_percent = 0.02
 
+    def run_crypto(self, symbols: list[str], exchange_name: str = "kucoin",
+                   start_date: str = "2025-01-01", end_date: str = "2026-01-01",
+                   timeframe: str = "15m"):
+        """Run backtest on ccxt exchange data."""
+        import ccxt
+        exchange_class = getattr(ccxt, exchange_name)
+        exchange = exchange_class({"enableRateLimit": True})
+        exchange.load_markets()
+
+        data = {}
+        for symbol in symbols:
+            if symbol not in exchange.markets:
+                continue
+            since = exchange.parse8601(f"{start_date}T00:00:00Z")
+            end_ms = exchange.parse8601(f"{end_date}T00:00:00Z")
+            ohlcv = []
+            while since < end_ms:
+                batch = exchange.fetch_ohlcv(symbol, timeframe=timeframe, since=since, limit=1000)
+                if not batch:
+                    break
+                ohlcv.extend(batch)
+                since = batch[-1][0] + 1
+            df = pd.DataFrame(ohlcv, columns=["ts","open","high","low","close","volume"])
+            df["ts"] = pd.to_datetime(df["ts"], unit="ms", utc=True)
+            df.set_index("ts", inplace=True)
+            data[symbol] = df
+
+        return self.run(list(data.keys()), data, start_date, end_date)
+
     @staticmethod
     def _to_float(value: Any) -> float:
         if hasattr(value, "item"):

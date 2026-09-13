@@ -24,7 +24,31 @@ class TrendingScanner:
             return []
 
     @staticmethod
-    def trending_usdt_pairs() -> list[str]:
-        """Convert trending coin symbols to USDT pairs (for KuCoin)."""
+    def trending_usdt_pairs(exchange_name: str = "kucoin",
+                           min_volume_usdt: float = 5_000_000) -> list[str]:
+        """Convert trending coin symbols to USDT pairs, filtering by exchange listing and volume."""
+        import ccxt
+
+        # Get trending coins from CoinGecko
         symbols = TrendingScanner.get_trending_coins()
-        return [f"{sym}/USDT" for sym in symbols if sym not in ("USDT", "USDC", "BUSD", "TUSD")]
+        if not symbols:
+            return []
+
+        # Load exchange markets
+        exchange_class = getattr(ccxt, exchange_name)
+        exchange = exchange_class({"enableRateLimit": True})
+        exchange.load_markets()
+
+        filtered = []
+        for sym in symbols:
+            pair = f"{sym}/USDT"
+            # Skip if not traded on the exchange
+            if pair not in exchange.markets:
+                continue
+            # Skip if not liquid enough
+            ticker = exchange.fetch_ticker(pair)
+            quote_vol = ticker.get("quoteVolume") or 0
+            if quote_vol < min_volume_usdt:
+                continue
+            filtered.append(pair)
+        return filtered

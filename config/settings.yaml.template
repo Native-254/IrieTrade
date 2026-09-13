@@ -326,7 +326,8 @@ scanner:
     min_volatility_ratio: 0.02
     max_volatility_ratio: 0.10
   crypto_criteria:
-    min_volume_usdt: 500000
+    min_volume_usdt: 5000000      # $5M daily
+    min_age_days: 30              # listed for at least a month
   top_n: 10
 
 rotation:
