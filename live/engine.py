@@ -167,6 +167,12 @@ class TradingEngine:
         self.trailing_stop_percent = 0.02
         self.is_running = False
 
+        # Read EOD and cap times from config (in UTC)
+        risk_cfg = self.config.get("risk_management", {})
+        self.eod_report_utc_time = risk_cfg.get("eod_report_utc_time", "20:55")
+        self.overnight_cap_utc_time = risk_cfg.get("overnight_cap_utc_time", "19:50")
+        self.weekend_flatten_utc_time = risk_cfg.get("weekend_flatten_utc_time", "19:50")
+
         # First-run welcome flag
         self.first_run = not Path("data/.welcome_shown").exists()
         if self.first_run:
@@ -1517,6 +1523,11 @@ class TradingEngine:
                     )
             schedule.every().day.at(scan_time).do(self._run_clone_monitor)
             schedule.every().day.at(scan_time).do(self._run_trending_scanner)
+
+        # Schedule EOD risk report and time-based caps
+        schedule.every().day.at(self.eod_report_utc_time).do(self._log_eod_risk_report)
+        schedule.every().day.at(self.overnight_cap_utc_time).do(self._apply_overnight_cap)
+        schedule.every().day.at(self.weekend_flatten_utc_time).do(self._apply_weekend_flatten)
 
         api_port = self.config["monitoring"]["health_check_port"]
         set_trading_engine(self)

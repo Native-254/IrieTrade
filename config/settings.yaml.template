@@ -127,6 +127,13 @@ risk_management:
   per_symbol_multipliers:
     QBTS: 4.0
     OPTT: 4.5
+  # EOD reporting and time-based caps (times in UTC)
+  eod_report_utc_time: "20:55"   # 15:55 ET during daylight saving
+  overnight_cap_utc_time: "19:50" # 15:50 ET during daylight saving
+  weekend_flatten_utc_time: "19:50" # same time on Friday
+  overnight_cap_threshold: 0.20   # reduce positions >20% NAV to 20%
+  weekend_flatten_threshold: 0.25 # reduce positions >25% NAV to 15%
+  weekend_flatten_target: 0.15.0
 
   risk_by_broker:
     kucoin:                           # tighter risk management for small balances
