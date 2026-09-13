@@ -1589,6 +1589,136 @@ class TradingEngine:
                     f"price={price:<12.4f} notional={notional:>10.2f} ({pct:5.1f}% NAV)"
                 )
         log.info("=== End of EOD risk report ===")
+    def _apply_overnight_cap(self):
+        """Apply overnight position size caps by reducing oversized positions."""
+        log.info("=== Applying overnight position caps ===")
+        for broker_name, pm in self.position_managers.items():
+            if not pm.positions:
+                continue
+
+            latest_prices = self.broker_latest_prices.get(broker_name, {})
+            try:
+                account = self.broker_manager.brokers[broker_name].get_account_info()
+                capital = float(account.get("net_liquidation", 0.0) or 0.0)
+            except Exception as e:  # noqa: BLE001
+                log.debug(f"{broker_name}: could not fetch capital for overnight cap: {e}")
+                capital = 0.0
+
+            if capital <= 0:
+                continue
+
+            # Get overnight cap threshold from config (default 0.20 = 20%)
+            risk_cfg = self.config.get("risk_management", {})
+            overnight_cap_threshold = risk_cfg.get("overnight_cap_threshold", 0.20)
+
+            for sym, pos in list(pm.positions.items()):
+                price = latest_prices.get(sym, pos.entry_price)
+                if price <= 0:
+                    continue
+                notional = pos.quantity * price
+                position_pct = notional / capital
+
+                if position_pct > overnight_cap_threshold:
+                    # Calculate target value to reduce to
+                    target_notional = capital * overnight_cap_threshold
+                    excess_notional = notional - target_notional
+                    reduce_qty = excess_notional / price
+
+                    # For non-crypto, round to whole shares
+                    if not self._is_crypto(sym):
+                        reduce_qty = int(reduce_qty)
+                        if reduce_qty <= 0:
+                            continue
+
+                    # Determine side to reduce (opposite of position)
+                    reduce_side = "SELL" if pos.side == "BUY" else "BUY_TO_COVER"
+                    log.info(
+                        f"{broker_name}: {sym} position at {position_pct:.1%} NAV exceeds "
+                        f"overnight cap {overnight_cap_threshold:.0%}. Reducing by {reduce_qty:.6f}"
+                    )
+                    
+                    self._place_trade(
+                        broker=self.broker_manager.brokers[broker_name],
+                        pm=pm,
+                        symbol=sym,
+                        action=reduce_side,
+                        quantity=reduce_qty,
+                        last_price=price,
+                        stop_loss=0.0,
+                        atr=0.0,
+                        vol_stop_mult=0.0,
+                        strategy_name="Overnight Cap"
+                    )
+        log.info("=== Overnight position caps applied ===")
+
+    def _apply_weekend_flatten(self):
+        """Apply weekend position reduction by reducing oversized positions on Fridays."""
+        # Only run on Friday (weekday 4 where Monday is 0)
+        if datetime.now(timezone.utc).weekday() != 4:  # Not Friday
+            return
+
+        log.info("=== Applying weekend position flattening ===")
+        for broker_name, pm in self.position_managers.items():
+            if not pm.positions:
+                continue
+
+            latest_prices = self.broker_latest_prices.get(broker_name, {})
+            try:
+                account = self.broker_manager.brokers[broker_name].get_account_info()
+                capital = float(account.get("net_liquidation", 0.0) or 0.0)
+            except Exception as e:  # noqa: BLE001
+                log.debug(f"{broker_name}: could not fetch capital for weekend flatten: {e}")
+                capital = 0.0
+
+            if capital <= 0:
+                continue
+
+            # Get weekend flatten thresholds from config
+            risk_cfg = self.config.get("risk_management", {})
+            weekend_flatten_threshold = risk_cfg.get("weekend_flatten_threshold", 0.25)  # 25%
+            weekend_flatten_target = risk_cfg.get("weekend_flatten_target", 0.15)     # 15%
+
+            for sym, pos in list(pm.positions.items()):
+                price = latest_prices.get(sym, pos.entry_price)
+                if price <= 0:
+                    continue
+                notional = pos.quantity * price
+                position_pct = notional / capital
+
+                if position_pct > weekend_flatten_threshold:
+                    # Calculate target value to reduce to
+                    target_notional = capital * weekend_flatten_target
+                    excess_notional = notional - target_notional
+                    reduce_qty = excess_notional / price
+
+                    # For non-crypto, round to whole shares
+                    if not self._is_crypto(sym):
+                        reduce_qty = int(reduce_qty)
+                        if reduce_qty <= 0:
+                            continue
+
+                    # Determine side to reduce (opposite of position)
+                    reduce_side = "SELL" if pos.side == "BUY" else "BUY_TO_COVER"
+                    log.info(
+                        f"{broker_name}: {sym} position at {position_pct:.1%} NAV exceeds "
+                        f"weekend threshold {weekend_flatten_threshold:.0%}. Reducing to "
+                        f"{weekend_flatten_target:.0%} NAV by {reduce_qty:.6f}"
+                    )
+                    
+                    self._place_trade(
+                        broker=self.broker_manager.brokers[broker_name],
+                        pm=pm,
+                        symbol=sym,
+                        action=reduce_side,
+                        quantity=reduce_qty,
+                        last_price=price,
+                        stop_loss=0.0,
+                        atr=0.0,
+                        vol_stop_mult=0.0,
+                        strategy_name="Weekend Flatten"
+                    )
+        log.info("=== Weekend position flattening applied ===")
+
 
     # ------------------------------------------------------------------
     # Scanners
