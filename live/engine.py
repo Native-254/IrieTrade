@@ -469,6 +469,7 @@ class TradingEngine:
 
         # ---------- ENTRY ----------
         if action in ("BUY", "SELL_SHORT"):
+            broker_label = self._get_broker_source(broker)
             filled_qty = self._simulate_partial_fill(quantity)
             if filled_qty <= 0:
                 return False
@@ -651,6 +652,7 @@ class TradingEngine:
 
         # ---------- EXIT ----------
         else:
+            broker_label = self._get_broker_source(broker)
             pos = pm.positions.get(symbol)
             if not pos:
                 log.warning(f"No internal position for {symbol}")
