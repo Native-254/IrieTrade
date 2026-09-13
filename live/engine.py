@@ -665,6 +665,25 @@ class TradingEngine:
             min_notional = self._get_min_order_notional(broker, symbol)
             order_notional = filled_qty * last_price
             if min_notional > 0 and order_notional < min_notional:
+                # Calculate PnL for the dust position being removed
+                if pos.entry_price <= 0:
+                    pnl_dollar = 0.0
+                else:
+                    if pos.side == "BUY":
+                        pnl_dollar = (last_price - pos.entry_price) * pos.quantity
+                    else:  # SELL
+                        pnl_dollar = (pos.entry_price - last_price) * pos.quantity
+                # Log the trade
+                self._log_trade(
+                    symbol,
+                    action,
+                    pos.quantity,
+                    pos.entry_price,
+                    last_price,
+                    pnl_dollar,
+                    pos.side,
+                )
+                # Remove the position internally
                 pm.close_position(symbol)
                 log.warning(
                     f"Skipping exit for {symbol}: notional {order_notional:.8f} "
