@@ -169,7 +169,7 @@ class TradingEngine:
 
         # Read EOD and cap times from config (in UTC)
         risk_cfg = self.config.get("risk_management", {})
-        self.eod_report_utc_time = risk_cfg.get("eod_report_utc_time", "20:55")
+        self.eod_report_utc_time = risk_cfg.get("eod_report_utc_time", "19:55")
         self.overnight_cap_utc_time = risk_cfg.get("overnight_cap_utc_time", "19:50")
         self.weekend_flatten_utc_time = risk_cfg.get("weekend_flatten_utc_time", "19:50")
 
@@ -1555,6 +1555,40 @@ class TradingEngine:
     def _reset_daily_pnl(self):
         for rm in self.risk_managers.values():
             rm.reset_daily_pnl()
+
+    def _log_eod_risk_report(self):
+        """Log a per-broker summary of open positions and exposure at end of day."""
+        log.info("=== End-of-day risk report ===")
+        for broker_name, pm in self.position_managers.items():
+            if not pm.positions:
+                log.info(f"{broker_name}: no open positions")
+                continue
+
+            latest_prices = self.broker_latest_prices.get(broker_name, {})
+            total_value = 0.0
+            rows = []
+            for sym, pos in pm.positions.items():
+                price = latest_prices.get(sym, pos.entry_price)
+                notional = pos.quantity * price if price > 0 else 0.0
+                total_value += notional
+                rows.append((sym, pos.side, pos.quantity, price, notional))
+
+            # Compute concentration using the broker's current capital as denominator
+            try:
+                account = self.broker_manager.brokers[broker_name].get_account_info()
+                capital = float(account.get("net_liquidation", 0.0) or 0.0)
+            except Exception as e:  # noqa: BLE001
+                log.debug(f"{broker_name}: could not fetch capital for EOD report: {e}")
+                capital = 0.0
+
+            log.info(f"{broker_name}: {len(rows)} open positions, gross notional {total_value:.2f}")
+            for sym, side, qty, price, notional in sorted(rows, key=lambda r: -r[4]):
+                pct = (notional / capital * 100) if capital > 0 else 0.0
+                log.info(
+                    f"  {sym:12s} {side:5s} qty={qty:<12.6f} "
+                    f"price={price:<12.4f} notional={notional:>10.2f} ({pct:5.1f}% NAV)"
+                )
+        log.info("=== End of EOD risk report ===")
 
     # ------------------------------------------------------------------
     # Scanners
