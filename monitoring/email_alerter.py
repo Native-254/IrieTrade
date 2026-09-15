@@ -124,3 +124,7 @@ class EmailAlerter:
         </html>
         """
         self._send_with_thread(subject, body, self.THREAD_ERRORS)
+
+    def send_email(self, subject: str, body: str) -> None:
+        """Send a generic email (used for reports)."""
+        self._send_with_thread(subject, body, thread_id=None)

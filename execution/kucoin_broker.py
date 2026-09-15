@@ -1,4 +1,5 @@
 import time
+from datetime import datetime, timezone
 
 import ccxt
 
@@ -219,6 +220,27 @@ class KucoinBroker(Broker):
                 }
             )
         return positions
+
+    def get_average_cost(self, symbol: str) -> tuple[float, datetime | None]:
+        """Fetch the most recent buy price and time for a symbol from trade history."""
+        if not self.connected:
+            self.connect()
+        if self.exchange is None:
+            return 0.0, None
+        try:
+            trades = self.exchange.fetch_my_trades(symbol, limit=50)  # type: ignore[attr-defined]
+        except ccxt.BaseError as e:
+            log.warning(f"KuCoin fetch_my_trades failed for {symbol}: {e}")
+            return 0.0, None
+        buys = [t for t in trades if isinstance(t, dict) and t.get("side") == "buy" and t.get("price") is not None and t.get("amount") is not None and t.get("timestamp") is not None]
+        if not buys:
+            return 0.0, None
+        total_qty = sum(float(t["amount"]) for t in buys)
+        if total_qty == 0:
+            return 0.0, None
+        avg = sum(float(t["price"]) * float(t["amount"]) for t in buys) / total_qty
+        last_ts = datetime.fromtimestamp(buys[-1]["timestamp"] / 1000, tz=timezone.utc)
+        return avg, last_ts
 
     def is_shortable(self, symbol: str, quantity: float) -> bool:
         return False

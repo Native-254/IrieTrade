@@ -11,6 +11,7 @@ class DiscordAlerter:
         self.enabled = self.config["enabled"]
         if self.enabled:
             self.webhook_url = self.config["webhook_url"]
+            self.nse_webhook_url = self.config.get("nse_webhook_url")
             log.info("Discord alerter initialized.")
 
     def send_message(self, message: str):
@@ -83,3 +84,15 @@ class DiscordAlerter:
         if not self.enabled:
             return
         self.send_embed(title="⚠️ Bot Error", description=error_message, color=0xFFA500)
+
+    def send_nse_report(self, report: str) -> None:
+        """Send an NSE report to the NSE Discord webhook."""
+        if not self.enabled or not self.nse_webhook_url:
+            return
+        try:
+            payload = {"content": report}
+            response = requests.post(self.nse_webhook_url, json=payload, timeout=10)
+            response.raise_for_status()
+            log.debug(f"NSE report sent to Discord: {report[:50]}...")
+        except Exception as e:  # noqa: BLE001
+            log.error(f"Failed to send NSE report to Discord: {e}")

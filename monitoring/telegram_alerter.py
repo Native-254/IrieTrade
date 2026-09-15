@@ -12,6 +12,7 @@ class TelegramAlerter:
         self.chat_id = self.config.get("chat_id", "")
         self.group_id = self.config.get("group_id", "")
         self.channel_id = self.config.get("channel_id", "")
+        self.nse_topic_id = self.config.get("nse_topic_id", 0)
         self.enabled = bool(self.bot_token and self.chat_id)
         if self.enabled:
             self.base_url = f"https://api.telegram.org/bot{self.bot_token}/"
@@ -60,3 +61,23 @@ class TelegramAlerter:
             return
         msg = f"<b>⚠️ Bot Error</b>\n{error_message}"
         self.send_message(msg)
+
+    def send_nse_report(self, text: str) -> None:
+        """Send an NSE report to the NSE topic in the supergroup."""
+        if not (self.bot_token and self.group_id and self.nse_topic_id):
+            log.warning("NSE report skipped: missing bot_token, group_id, or nse_topic_id.")
+            return
+        url = f"https://api.telegram.org/bot{self.bot_token}/sendMessage"
+        payload = {
+            "chat_id": self.group_id,
+            "message_thread_id": self.nse_topic_id,
+            "text": text,
+            "parse_mode": "Markdown",
+            "disable_web_page_preview": True,
+        }
+        try:
+            resp = requests.post(url, data=payload, timeout=10)
+            if resp.status_code != 200:
+                log.error(f"NSE Telegram send failed: {resp.status_code} {resp.text}")
+        except Exception as e:  # noqa: BLE001
+            log.error(f"NSE Telegram send exception: {e}")

@@ -36,6 +36,8 @@ from strategies.stochastic import StochasticCross
 from strategies.trend_following_long_only import TrendFollowingLongOnly
 from strategies.trend_following_ls import TrendFollowingLS
 from strategies.vwap_revisions import VWAPReversion
+from tools.nse_report import NSEReportGenerator
+from tools.nse_scanner import NSEScanner
 from tools.scanner import MarketScanner
 from tools.sentiment_scanner import TrendingScanner
 from utils.config import CONFIG
@@ -163,6 +165,27 @@ class TradingEngine:
         # Scanner integration
         self.scanner_enabled = self.config.get("scanner", {}).get("enabled", False)
         self.scanner = MarketScanner() if self.scanner_enabled else None
+
+        # NSE integration
+        self.nse_enabled = self.config.get("nse", {}).get("enabled", False)
+        if self.nse_enabled:
+            self.nse_scanner = NSEScanner(self.config)
+            api_key = os.getenv("AI_API_KEY")
+            api_url = os.getenv("AI_API_URL")
+            model = os.getenv("AI_MODEL")
+            if api_key and api_url and model:
+                self.nse_report_generator = NSEReportGenerator(
+                    self.nse_scanner,
+                    llm_api_key=api_key,
+                    llm_api_url=api_url,
+                    llm_model=model
+                )
+            else:
+                self.nse_report_generator = None
+                log.warning("NSE report generator not initialized: missing AI_API_KEY, AI_API_URL, or AI_MODEL")
+        else:
+            self.nse_scanner = None
+            self.nse_report_generator = None
 
         self.trailing_stop_percent = 0.02
         self.is_running = False
@@ -792,15 +815,23 @@ class TradingEngine:
                 total_seconds = holding_time.total_seconds()
                 hours = int(total_seconds // 3600)
                 minutes = int((total_seconds % 3600) // 60)
-                pnl_percent = pnl_frac * 100
                 pnl_amount = pnl_dollar
                 strategy_display = strategy_name if strategy_name is not None else "Unknown"
+                # Format P&L with more precision for small values
+                if abs(pnl_amount) < 0.01:
+                    pnl_amount_str = f"{pnl_amount:+.4f}"
+                else:
+                    pnl_amount_str = f"{pnl_amount:+.2f}"
+                if abs(pnl_frac) < 0.0001:
+                    pnl_percent_str = f"{pnl_frac:+.6%}"
+                else:
+                    pnl_percent_str = f"{pnl_frac:+.2%}"
 
                 exit_message = (
                     f"<b>{direction_emoji} {direction_text} — {symbol}</b>\n"
                     f"Strategy: {strategy_display}\n"
                     f"Entry: <code>{pos.entry_price:,.4f}</code> → Exit: <code>${avg_price:,.4f}</code>\n"
-                    f"Result: {pnl_percent:+.2f}%  |  P&L: <code>${pnl_amount:+.2f}</code>\n"
+                    f"Result: {pnl_percent_str}  |  P&L: <code>${pnl_amount_str}</code>\n"
                     f"Held: {hours}h {minutes}m\n"
                     f"<i>Not financial advice.</i>"
                 )
@@ -1444,6 +1475,15 @@ class TradingEngine:
                 if sym not in pm.positions:
                     # Use broker avg_cost if valid, otherwise fall back to latest price
                     entry_price = avg_cost if avg_cost > 0.0 else self.latest_prices.get(sym, 0.0)
+                    entry_time = datetime.now(timezone.utc)
+
+                    # If we have a KucoinBroker and the avg_cost is zero or invalid, try to get the average cost from trade history
+                    if avg_cost <= 0.0 and hasattr(broker, 'get_average_cost') and self._is_crypto(sym):
+                        avg_cost_from_trades, last_trade_time = broker.get_average_cost(sym)
+                        if avg_cost_from_trades > 0.0:
+                            entry_price = avg_cost_from_trades
+                            entry_time = last_trade_time
+
                     pm.open_position(
                         Position(
                             symbol=sym,
@@ -1452,7 +1492,7 @@ class TradingEngine:
                             entry_price=entry_price,
                             stop_loss=init_stop,
                             stop_order_id=0,
-                            entry_time=datetime.now(timezone.utc),
+                            entry_time=entry_time,
                         )
                     )
                 else:
@@ -1528,6 +1568,14 @@ class TradingEngine:
         schedule.every().day.at(self.eod_report_utc_time).do(self._log_eod_risk_report)
         schedule.every().day.at(self.overnight_cap_utc_time).do(self._apply_overnight_cap)
         schedule.every().day.at(self.weekend_flatten_utc_time).do(self._apply_weekend_flatten)
+
+        # Schedule NSE reports
+        if self.nse_enabled and self.nse_report_generator:
+            nse_cfg = self.config.get("nse", {})
+            report_times = nse_cfg.get("report_times", {})
+            schedule.every().day.at(report_times.get("morning", "05:45")).do(self._run_nse_morning_report)
+            schedule.every().day.at(report_times.get("midday", "09:30")).do(self._run_nse_midday_report)
+            schedule.every().day.at(report_times.get("close", "12:15")).do(self._run_nse_close_report)
 
         api_port = self.config["monitoring"]["health_check_port"]
         set_trading_engine(self)
@@ -1773,7 +1821,7 @@ class TradingEngine:
     def _run_trending_scanner(self):
         """Update KuCoin symbols with CoinGecko trending coins."""
         if self.scanner is None:
-            return 
+            return
         log.info("Running trending scanner...")
         trending_pairs = TrendingScanner.trending_usdt_pairs()
         if trending_pairs:
@@ -1785,6 +1833,63 @@ class TradingEngine:
             )
         else:
             log.warning("Trending scanner returned no symbols.")
+
+    # NSE Report Methods
+    def _run_nse_morning_report(self):
+        """Generate and disseminate NSE morning brief."""
+        log.info("Generating NSE morning report...")
+        if not self.nse_report_generator:
+            log.warning("NSE report generator not available")
+            return
+        report = self.nse_report_generator.generate_morning_note()
+        # Send to all NSE channels: Discord NSE webhook, Telegram NSE topic, Email
+        self._disseminate_nse_report(report, "morning")
+        log.info("NSE morning report disseminated")
+
+    def _run_nse_midday_report(self):
+        """Generate and disseminate NSE midday pulse."""
+        log.info("Generating NSE midday report...")
+        if not self.nse_report_generator:
+            log.warning("NSE report generator not available")
+            return
+        # For midday, we might want a shorter report, but for simplicity we use the same scanner data
+        # We'll create a simple pulse message
+        candidates = self.nse_scanner.scan() # type: ignore
+        if not candidates:
+            pulse = "No NSE data available for midday pulse."
+        else:
+            pulse_lines = [
+                f"{c['ticker']}: {c['price']:.2f} KES, 5d {c['chg_5d']:+.2f}%"
+                for c in candidates
+            ]
+            pulse = "📈 *NSE Midday Pulse*\n\n" + "\n".join(pulse_lines) + "\n\nNot financial advice."
+        self._disseminate_nse_report(pulse, "midday")
+        log.info("NSE midday report disseminated")
+
+    def _run_nse_close_report(self):
+        """Generate and disseminate NSE close summary."""
+        log.info("Generating NSE close report...")
+        if not self.nse_report_generator:
+            log.warning("NSE report generator not available")
+            return
+        report = self.nse_report_generator.generate_morning_note()  # Reuse morning note for simplicity; could be enhanced
+        self._disseminate_nse_report(report, "close")
+        log.info("NSE close report disseminated")
+
+    def _disseminate_nse_report(self, report: str, report_type: str):
+        """Send NSE report to configured channels."""
+        # Discord NSE webhook
+        if hasattr(self, 'discord') and self.discord:
+            self.discord.send_nse_report(report)
+        # Telegram NSE topic
+        if hasattr(self, 'telegram') and self.telegram:
+            self.telegram.send_nse_report(report)
+        # Email
+        if hasattr(self, 'email') and self.email:
+            self.email.send_email(
+                subject=f"IrieTrade NSE {report_type.capitalize()} Report",
+                body=report,
+            )
 
 
 class HealthStatus(BaseModel):
