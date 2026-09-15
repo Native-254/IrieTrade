@@ -7,6 +7,7 @@ from pathlib import Path
 from urllib.error import HTTPError, URLError
 from urllib.request import Request as UrlRequest
 from urllib.request import urlopen
+from urllib.parse import urlparse
 
 import pandas as pd
 import plotly.graph_objects as go
@@ -40,7 +41,12 @@ def _post_ai_request(api_url: str, api_key: str, payload: dict) -> dict:
     """
     
     # Check if this is a Gemini API URL
-    is_gemini = "generativelanguage.googleapis.com" in api_url and ":generateContent" in api_url
+    parsed = urlparse(api_url)
+    is_gemini = (
+        parsed.scheme == "https"
+        and parsed.netloc == "generativelanguage.googleapis.com"
+        and parsed.path.endswith(":generateContent")
+    )
     
     if is_gemini:
         # Gemini API format
