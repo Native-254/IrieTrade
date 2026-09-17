@@ -36,6 +36,8 @@ from strategies.stochastic import StochasticCross
 from strategies.trend_following_long_only import TrendFollowingLongOnly
 from strategies.trend_following_ls import TrendFollowingLS
 from strategies.vwap_revisions import VWAPReversion
+from tools.african_history import AfricanHistoryStore
+from tools.african_scanner import AfricanMarketScanner
 from tools.nse_report import NSEReportGenerator
 from tools.nse_scanner import NSEScanner
 from tools.scanner import MarketScanner
@@ -186,6 +188,15 @@ class TradingEngine:
         else:
             self.nse_scanner = None
             self.nse_report_generator = None
+
+        # African market integration
+        self.african_enabled = self.config.get("african_scanner", {}).get("enabled", False)
+        if self.african_enabled:
+            self.african_scanner = AfricanMarketScanner(self.config.get("african_scanner", {}))
+            self.african_history = AfricanHistoryStore(self.african_scanner)
+        else:
+            self.african_scanner = None
+            self.african_history = None
 
         self.trailing_stop_percent = 0.02
         self.is_running = False
@@ -1577,6 +1588,17 @@ class TradingEngine:
             schedule.every().day.at(report_times.get("midday", "09:30")).do(self._run_nse_midday_report)
             schedule.every().day.at(report_times.get("close", "12:15")).do(self._run_nse_close_report)
 
+        # Schedule African market reports and snapshots
+        if self.african_enabled:
+            african_cfg = self.config.get("african_scanner", {})
+            schedule_times = african_cfg.get("schedule", {})
+            # Daily snapshot after market close
+            schedule.every().day.at(schedule_times.get("snapshot", "12:30")).do(self._capture_african_snapshots)
+            # Morning report
+            schedule.every().day.at(schedule_times.get("morning_report", "05:45")).do(self._run_african_morning_reports)
+            # Close report
+            schedule.every().day.at(schedule_times.get("close_report", "12:15")).do(self._run_african_close_report)
+
         api_port = self.config["monitoring"]["health_check_port"]
         set_trading_engine(self)
         api_thread = threading.Thread(
@@ -1890,6 +1912,56 @@ class TradingEngine:
                 subject=f"IrieTrade NSE {report_type.capitalize()} Report",
                 body=report,
             )
+
+    def _capture_african_snapshots(self):
+        """Capture daily snapshots for all enabled African exchanges."""
+        if not self.african_history:
+            return
+        log.info("Capturing African market snapshots...")
+        self.african_history.capture_all()
+        log.info("African market snapshots captured")
+
+    def _run_african_morning_reports(self):
+        """Generate and disseminate African market morning briefs for all exchanges."""
+        if not self.african_scanner:
+            log.warning("African market scanner not available")
+            return
+        log.info("Generating African market morning reports...")
+        # Generate reports for each enabled exchange
+        african_cfg = self.config.get("african_scanner", {})
+        exchanges = african_cfg.get("exchanges", ["NSE", "JSE", "NGX", "GSE", "BRVM"])
+        for exchange in exchanges:
+            try:
+                report = self.african_scanner.generate_report(exchange)
+                # Send to Telegram topic for this exchange
+                self.telegram.send_exchange_report(exchange, report)
+                # Also send to email
+                self.email.send_email(f"IrieTrade {exchange} Morning Report", report)
+                log.info(f"African {exchange} morning report disseminated")
+            except Exception as e:  # noqa: BLE001
+                log.warning(f"Morning report failed for {exchange}: {e}")
+
+    def _run_african_close_report(self):
+        """Generate and disseminate African market close summaries for all exchanges."""
+        if not self.african_scanner:
+            log.warning("African market scanner not available")
+            return
+        log.info("Generating African market close reports...")
+        # Capture snapshots first (for indicator calculation)
+        self._capture_african_snapshots()
+        # Generate reports for each enabled exchange
+        african_cfg = self.config.get("african_scanner", {})
+        exchanges = african_cfg.get("exchanges", ["NSE", "JSE", "NGX", "GSE", "BRVM"])
+        for exchange in exchanges:
+            try:
+                report = self.african_scanner.generate_report(exchange)
+                # Send to Telegram topic for this exchange
+                self.telegram.send_exchange_report(exchange, report)
+                # Also send to email
+                self.email.send_email(f"IrieTrade {exchange} Close Report", report)
+                log.info(f"African {exchange} close report disseminated")
+            except Exception as e:  # noqa: BLE001
+                log.warning(f"Close report failed for {exchange}: {e}")
 
 
 class HealthStatus(BaseModel):

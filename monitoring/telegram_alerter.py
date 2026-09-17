@@ -13,6 +13,7 @@ class TelegramAlerter:
         self.group_id = self.config.get("group_id", "")
         self.channel_id = self.config.get("channel_id", "")
         self.nse_topic_id = self.config.get("nse_topic_id", 0)
+        self.topics = self.config.get("topics", {})
         self.enabled = bool(self.bot_token and self.chat_id)
         if self.enabled:
             self.base_url = f"https://api.telegram.org/bot{self.bot_token}/"
@@ -81,3 +82,29 @@ class TelegramAlerter:
                 log.error(f"NSE Telegram send failed: {resp.status_code} {resp.text}")
         except Exception as e:  # noqa: BLE001
             log.error(f"NSE Telegram send exception: {e}")
+
+    def send_exchange_report(self, exchange: str, text: str) -> None:
+        """Route a report to the correct topic for the exchange."""
+        if not self.bot_token or not self.group_id:
+            return
+        # Get topics from config, defaulting to empty dict if not present
+        topics = self.config.get("topics", {})
+        thread_id = topics.get(exchange)
+        if not thread_id:
+            log.warning(f"No Telegram topic configured for {exchange}")
+            return
+
+        url = f"https://api.telegram.org/bot{self.bot_token}/sendMessage"
+        payload = {
+            "chat_id": self.group_id,
+            "message_thread_id": thread_id,
+            "text": text,
+            "parse_mode": "Markdown",
+            "disable_web_page_preview": True,
+        }
+        try:
+            resp = requests.post(url, data=payload, timeout=10)
+            if resp.status_code != 200:
+                log.error(f"Telegram send failed for {exchange}: {resp.status_code} {resp.text}")
+        except Exception as e:  # noqa: BLE001
+            log.error(f"Telegram send exception for {exchange}: {e}")
