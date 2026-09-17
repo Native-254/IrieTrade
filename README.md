@@ -10,7 +10,7 @@ A fully automated, risk‑managed trading bot for the **NYSE** (via Interactive 
 ![Bot Status](https://img.shields.io/badge/status-paper_trading-brightgreen)
 ![License](https://img.shields.io/badge/license-MIT-blue)
 ![Python](https://img.shields.io/badge/python-3.11%2B-blue)
-[![Star this repo](https://img.shields.io/github/stars/Native-254/trading-bot?style=social)](https://github.com/Native-254/IrieTrade)
+[![Star this repo](https://img.shields.io/github/stars/Native-254/IrieTrade?style=social)](https://github.com/Native-254/IrieTrade)
 [![Contributions Welcome](https://img.shields.io/badge/contributions-welcome-brightgreen.svg?style=flat)](CONTRIBUTING.md)
 
 > **💡 Found a bug? Have an idea?**
@@ -124,14 +124,15 @@ trading_bot/
 
 - Python 3.11+
 - Interactive Brokers Gateway (or TWS) with paper trading account (for IBKR trading)
-- (Optional) API keys for crypto exchanges
+- (Optional) API keys for crypto exchanges (Binance, OKX, Coinbase, Kraken, KuCoin)
+- (Optional) API key for Deriv synthetic indices trading
 - (Optional) Discord webhook, Telegram bot, or email account for alerts
 
 ### Installation
 
 ```bash
-git clone https://github.com/Native-254/trading-bot.git
-cd trading-bot
+git clone https://github.com/Native-254/IrieTrade.git
+cd IrieTrade
 python -m venv venv
 source venv/bin/activate   # Windows: venv\Scripts\activate
 pip install -r requirements.txt
@@ -159,6 +160,8 @@ echo "EMAIL_RECIPIENT=recipient@email.com" >> .env
 echo "EMAIL_BREVO_API_KEY=your_brevo_api_key" >> .env
 # For Gmail SMTP (fallback)
 echo "EMAIL_PASSWORD=your-16-char-app-password" >> .env
+# Deriv API key (get from app.deriv.com)
+echo "DERIV_API_KEY=your_deriv_api_key_here" >> .env
 # Add any crypto exchange keys as needed (see docs)
 ```
 

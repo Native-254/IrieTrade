@@ -14,7 +14,7 @@ trading:
   symbols: ["AAPL", "MSFT", "GOOGL"]
   symbols_by_broker:
     ib:
-      - "AAPL"             # sample symbols
+      - "AAPL"
       - "MSFT"
       - "GOOGL"
       - "TSLA"
@@ -80,12 +80,12 @@ trading:
       - "WEC"
       - "ES"
       - "CMS"
-      - "EUR.USD"          # Forex pairs
+      - "EUR.USD"
       - "GBP.USD"
       - "USD.JPY"
-      - "XAUUSD"           # Metals (Gold/Silver)
+      - "XAUUSD"
       - "XAGUSD"
-      - "CL=F"             # Oils (WTI/Brent crude futures)
+      - "CL=F"
       - "BZ=F"
     kucoin:
       - "ADA/USDT"
@@ -98,17 +98,37 @@ trading:
       - "APT/USDT"
       - "SUI/USDT"
       - "LTC/USDT"
+    binance:
+      - "BTC/USDT"
+      - "ETH/USDT"
+      - "BNB/USDT"
+      - "SOL/USDT"
+      - "DOGE/USDT"
+    okx:
+      - "BTC/USDT"
+      - "ETH/USDT"
+      - "SOL/USDT"
+      - "XRP/USDT"
+    coinbase:
+      - "BTC/USD"
+      - "ETH/USD"
+      - "SOL/USD"
+    kraken:
+      - "BTC/USDT"
+      - "ETH/USDT"
+      - "SOL/USDT"
+      - "XRP/USDT"
     deriv:
-      - "R_10"     # Volatility 10 Index
-      - "R_25"     # Volatility 25 Index
-      - "R_50"     # Volatility 50 Index
-      - "R_75"     # Volatility 75 Index
-      - "R_100"    # Volatility 100 Index
-      - "BOOM100"  # Boom 100 Index
-      - "BOOM500"  # Boom 500 Index
-      - "BOOM1000" # Boom 1000 Index
-      - "CRASH100" # Crash 100 Index
-      - "CRASH500" # Crash 500 Index
+      - "R_10"     # Volatility 10
+      - "R_25"     # Volatility 25
+      - "R_50"     # Volatility 50
+      - "R_75"     # Volatility 75
+      - "R_100"    # Volatility 100
+      - "BOOM100"  # Boom 100
+      - "BOOM500"  # Boom 500
+      - "BOOM1000" # Boom 1000
+      - "CRASH100" # Crash 100
+      - "CRASH500" # Crash 500
       - "XAUUSD"   # Gold
       - "XAGUSD"   # Silver
 
@@ -126,10 +146,10 @@ exchanges:
   kraken:
     testnet: true
   kucoin:
-    testnet: false   # set to testnet to gauge bot performance
+    testnet: false
   deriv:
-    # Deriv requires API key from app.deriv.com
-    # Add DERIV_API_KEY to your .env file
+    # Deriv uses WebSocket API, no testnet flag needed for production
+    # For testing, you would use a different app_id or endpoint
 
 data:
   sources:
@@ -152,20 +172,21 @@ risk_management:
     QBTS: 4.0
     OPTT: 4.5
   # EOD reporting and time-based caps (times in UTC)
-  eod_report_utc_time: "20:55"   # 15:55 ET during daylight saving
+  eod_report_utc_time: "19:55"   # 15:55 ET during daylight saving
   overnight_cap_utc_time: "19:50" # 15:50 ET during daylight saving
   weekend_flatten_utc_time: "19:50" # same time on Friday
   overnight_cap_threshold: 0.20   # reduce positions >20% NAV to 20%
   weekend_flatten_threshold: 0.25 # reduce positions >25% NAV to 15%
-  weekend_flatten_target: 0.15.0
+  weekend_flatten_target: 0.15
 
   risk_by_broker:
-    kucoin:                           # tighter risk management for small balances
-      max_gross_exposure: 5.0
-      max_position_pct: 0.50
-      max_net_exposure: 1.0
-      max_drawdown: 0.99
-      daily_loss_limit: 0.50
+  kucoin:
+    max_gross_exposure: 3.0        # 300%
+    max_position_pct: 0.20         # 20% per coin
+    max_net_exposure: 0.8          # 80%
+    max_drawdown: 0.25             # 25% drawdown halt
+    daily_loss_limit: 0.05         # 5% daily loss
+    volatility_stop_multiplier: 1.5
 
 strategies:
   active:
@@ -335,18 +356,28 @@ monitoring:
     enabled: true
   telegram:
     enabled: true
-    bot_token: ""
-    chat_id: ""   # add this in  .env
+    bot_token: "${TELEGRAM_BOT_TOKEN}"
+    chat_id: "${TELEGRAM_CHAT_ID}"          # your private alerts
+    group_id: "${TELEGRAM_GROUP_ID}"        # supergroup for discussion
+    channel_id: "${TELEGRAM_CHANNEL_ID}"    # public signals channel
+    topics:
+      NSE: 67
+      JSE: 67
+      NGX: 67
+      GSE: 67
+      BRVM: 67
+
   discord:
     enabled: true
     webhook_url: "https://discord.com/api/webhooks/..."
+    nse_webhook_url: "https://discord.com/api/webhooks/..."
   health_check_port: 8000
 
 scanner:
-  enabled: true                    # set to true to enable auto-scanning
-  schedule: "daily"                 # daily or weekly
-  time: "08:00"                     # UTC time to run
-  universe: ["SP500"]                      # stocks to scan; if empty, uses ib symbol list
+  enabled: true
+  schedule: "daily"
+  time: "08:00"
+  universe: ["SP500"]
   criteria:
     min_price: 10.0
     max_price: 500.0
@@ -357,10 +388,42 @@ scanner:
     min_volatility_ratio: 0.02
     max_volatility_ratio: 0.10
   crypto_criteria:
-
     min_volume_usdt: 5000000      # $5M daily
     min_age_days: 30              # listed for at least a month
   top_n: 10
 
+nse:
+  enabled: true
+  universe:
+    - "SCOM"
+    - "EQTY"
+    - "KCB"
+    - "EABL"
+    - "COOP"
+    - "ABSA"
+    - "NCBA"
+    - "KEGN"
+    - "KPLC"
+    - "SBIC"
+    - "DTK"
+    - "SCBK"
+    - "HFCK"
+    - "NMG"
+    - "JUB"
+  top_n: 5
+  report_times:
+    morning: "05:45"   # UTC, corresponds to 08:45 EAT
+    midday: "09:30"    # UTC, 12:30 EAT
+    close: "12:15"     # UTC, 15:15 EAT
+
+african_scanner:
+  enabled: true
+  exchanges: ["NSE", "JSE", "NGX", "GSE", "BRVM"]
+  top_n: 5
+  mansa_api_key_env: "MANSA_API_KEY"
+
 rotation:
-  enabled: true                     # automatically exit losing positions not in scanner list
+  enabled: true
+  max_holding_hours: 6          # Exit after 6 hours, not 24
+  max_unrealized_loss_pct: -0.015  # Close if losing more than 1.5%
+  cooldown_minutes: 120         # 2-hour cooldown after a loss
