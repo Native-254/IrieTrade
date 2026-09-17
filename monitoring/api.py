@@ -5,9 +5,9 @@ import os
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from urllib.error import HTTPError, URLError
+from urllib.parse import urlparse
 from urllib.request import Request as UrlRequest
 from urllib.request import urlopen
-from urllib.parse import urlparse
 
 import pandas as pd
 import plotly.graph_objects as go

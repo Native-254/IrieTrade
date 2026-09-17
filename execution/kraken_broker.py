@@ -70,7 +70,7 @@ class KrakenBroker(Broker):
 
         try:
             balance = self._fetch_balance_with_retry()
-        except Exception as e:  # noqa: BLE001
+        except Exception as e:
             log.error(f"Could not fetch Kraken balance after retries: {e}")
             raise
 

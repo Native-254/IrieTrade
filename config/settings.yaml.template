@@ -10,6 +10,7 @@ trading:
   platforms:
     - "ib"
     - "kucoin"
+    - "deriv"
   symbols: ["AAPL", "MSFT", "GOOGL"]
   symbols_by_broker:
     ib:
@@ -79,6 +80,13 @@ trading:
       - "WEC"
       - "ES"
       - "CMS"
+      - "EUR.USD"          # Forex pairs
+      - "GBP.USD"
+      - "USD.JPY"
+      - "XAUUSD"           # Metals (Gold/Silver)
+      - "XAGUSD"
+      - "CL=F"             # Oils (WTI/Brent crude futures)
+      - "BZ=F"
     kucoin:
       - "ADA/USDT"
       - "XRP/USDT"
@@ -90,6 +98,19 @@ trading:
       - "APT/USDT"
       - "SUI/USDT"
       - "LTC/USDT"
+    deriv:
+      - "R_10"     # Volatility 10 Index
+      - "R_25"     # Volatility 25 Index
+      - "R_50"     # Volatility 50 Index
+      - "R_75"     # Volatility 75 Index
+      - "R_100"    # Volatility 100 Index
+      - "BOOM100"  # Boom 100 Index
+      - "BOOM500"  # Boom 500 Index
+      - "BOOM1000" # Boom 1000 Index
+      - "CRASH100" # Crash 100 Index
+      - "CRASH500" # Crash 500 Index
+      - "XAUUSD"   # Gold
+      - "XAGUSD"   # Silver
 
 exchanges:
   ib:
@@ -106,6 +127,9 @@ exchanges:
     testnet: true
   kucoin:
     testnet: false   # set to testnet to gauge bot performance
+  deriv:
+    # Deriv requires API key from app.deriv.com
+    # Add DERIV_API_KEY to your .env file
 
 data:
   sources:

@@ -2,7 +2,7 @@
 import time
 from decimal import ROUND_HALF_UP, Decimal
 
-from ib_async import IB, LimitOrder, MarketOrder, Stock, StopOrder
+from ib_async import IB, LimitOrder, MarketOrder, Stock, StopOrder, Future, Forex
 
 from execution.broker import Broker
 from utils.config import CONFIG
@@ -66,6 +66,38 @@ class IBBroker(Broker):
     def _normalize_price(self, contract, price: float) -> float:
         return self._round_to_tick(float(price), self._get_min_tick(contract))
 
+    def _create_contract(self, symbol: str):
+        """Create appropriate contract based on symbol format.
+
+        Rules:
+        - If symbol has =F suffix → Future
+        - If symbol has . between two currencies → Forex (e.g., EUR.USD)
+        - If symbol starts with XAU/XAG or contains CFD → CFD
+        - Otherwise → Stock
+        """
+        # Future contracts (ending with =F)
+        if symbol.endswith("=F"):
+            # Remove the =F suffix for the symbol
+            future_symbol = symbol[:-2]
+            return Future(future_symbol, "SMART", "USD")
+
+        # Forex pairs (containing a single dot between currencies)
+        elif "." in symbol and len(symbol.split(".")) == 2:
+            base, quote = symbol.split(".")
+            # Common forex pairs - if both are 3-letter currencies, treat as forex
+            if len(base) == 3 and len(quote) == 3 and base.isalpha() and quote.isalpha():
+                return Forex(symbol)  # ib_async Forex expects the pair format like "EUR.USD"
+
+        # CFD contracts (starting with XAU/XAG or containing CFD)
+        elif symbol.startswith(("XAU", "XAG")) or "CFD" in symbol.upper():
+            # For CFDs, we'll use Stock contract but with appropriate exchange
+            # XAUUSD, XAGUSD are typically traded as CFDs on IBKR
+            return Stock(symbol, "SMART", "USD")
+
+        # Default to Stock
+        else:
+            return Stock(symbol, "SMART", "USD")
+
     @property
     def supports_shorting(self) -> bool:
         return self.is_margin
@@ -106,7 +138,7 @@ class IBBroker(Broker):
         elif ib_side == "SELL_SHORT":
             ib_side = "SELL"
 
-        contract = Stock(symbol, "SMART", "USD")
+        contract = self._create_contract(symbol)
         self.ib.qualifyContracts(contract)
         if order_type.upper() == "MKT":
             order = MarketOrder(ib_side, quantity)
@@ -140,7 +172,7 @@ class IBBroker(Broker):
     ) -> tuple[int | None, int | None]:
         if not self.connected:
             self.connect()
-        contract = Stock(symbol, "SMART", "USD")
+        contract = self._create_contract(symbol)
         self.ib.qualifyContracts(contract)
         stop_price = self._normalize_price(contract, stop_price)
         take_profit = self._normalize_price(contract, take_profit)
@@ -174,7 +206,7 @@ class IBBroker(Broker):
     ) -> tuple[int | None, int | None]:
         if not self.connected:
             self.connect()
-        contract = Stock(symbol, "SMART", "USD")
+        contract = self._create_contract(symbol)
         self.ib.qualifyContracts(contract)
         stop_price = self._normalize_price(contract, stop_price)
         take_profit = self._normalize_price(contract, take_profit)
@@ -260,7 +292,7 @@ class IBBroker(Broker):
             log.info(f"Short sale of {symbol} blocked – cash account.")
             return False
         try:
-            contract = Stock(symbol, "SMART", "USD")
+            contract = self._create_contract(symbol)
             self.ib.qualifyContracts(contract)
             shortable_func = getattr(self.ib, "shortableShares", None)
             if shortable_func is None:
