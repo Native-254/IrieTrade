@@ -1,7 +1,7 @@
 """African market scanner with dual-source data fetching.
 
 Primary:  Mansa Markets API (requires MANSA_API_KEY)
-Fallback: afx.kwayisi.org HTML tables (only as last resort)
+Fallback: afx.kwayisi.org HTML tables
 """
 
 from __future__ import annotations
@@ -15,7 +15,6 @@ import requests
 
 from utils.logger import log
 
-
 MANSA_BASE = "https://mansaapi.com/api/v1"
 AFX_TEMPLATE = "https://afx.kwayisi.org/{market}/"
 AFX_MARKETS = {
@@ -25,10 +24,17 @@ AFX_MARKETS = {
     "GSE": "gse",
     "BRVM": "brvm",
 }
+MANSA_EXCHANGES = {
+    "NSE": "NSE",
+    "JSE": "JSE",
+    "NGX": "NGX",
+    "GSE": "GSE",
+    "BRVM": "BRVM",
+}
 
 
 class AfricanMarketScanner:
-    """Fetches quotes from Mansa pan-African feed, falling back to afx.kwayisi.org."""
+    """Fetches quotes from Mansa, falling back to afx.kwayisi.org."""
 
     def __init__(self, config: dict | None = None) -> None:
         cfg = config or {}
@@ -37,51 +43,38 @@ class AfricanMarketScanner:
         self._cache: dict[str, tuple[float, list[dict]]] = {}
 
     # ------------------------------------------------------------------
-    # Mansa - Pan-African feed (one call covers all exchanges)
+    # Mansa
     # ------------------------------------------------------------------
-    def _fetch_mansa(self) -> list[dict]:
-        """Fetch pan-African movers. One call covers all exchanges."""
+    def _fetch_mansa(self, exchange: str) -> list[dict]:
         if not self.api_key:
             return []
         try:
             resp = requests.get(
-                f"{MANSA_BASE}/markets/movers/pan-african",
+                f"{MANSA_BASE}/markets/exchanges/{MANSA_EXCHANGES[exchange]}/stocks",
                 headers={"Authorization": f"Bearer {self.api_key}"},
-                timeout=30,
+                timeout=15,
             )
             if resp.status_code != 200:
-                log.warning(f"Mansa pan-african returned {resp.status_code}")
+                log.warning(f"Mansa {exchange} returned {resp.status_code}")
                 return []
             data = resp.json()
-        except (ValueError, KeyError, requests.RequestException) as e:
-            log.warning(f"Mansa pan-african fetch failed: {e}")
+            rows = data.get("data", data) if isinstance(data, dict) else data
+            return [
+                {
+                    "symbol": r.get("symbol") or r.get("ticker"),
+                    "price": r.get("current_price") or r.get("price"),
+                    "change_pct": r.get("change_percent") or r.get("change_pct", 0),
+                    "volume": r.get("volume", 0),
+                }
+                for r in rows
+                if r.get("symbol") or r.get("ticker")
+            ]
+        except Exception as e:  # noqa: BLE001
+            log.warning(f"Mansa {exchange} fetch failed: {e}")
             return []
 
-        payload = data.get("data", {}) if isinstance(data, dict) else {}
-        gainers = payload.get("gainers", []) or []
-        losers = payload.get("losers", []) or []
-
-        rows = []
-        for r in gainers + losers:
-            sym = r.get("ticker") or r.get("symbol")
-            price = r.get("price")
-            chg = r.get("change_pct")
-            vol = r.get("volume")
-            ex = r.get("exchange") or ""
-            if not sym or price is None:
-                continue
-            rows.append({
-                "symbol": str(sym).upper(),
-                "price": float(price),
-                "change_pct": float(chg) if chg is not None else 0.0,
-                "volume": float(vol) if vol is not None else 0.0,
-                "exchange": ex.upper(),
-                "name": r.get("name", ""),
-            })
-        return rows
-
     # ------------------------------------------------------------------
-    # afx.kwayisi.org fallback (only used when Mansa returns nothing)
+    # afx.kwayisi.org fallback
     # ------------------------------------------------------------------
     def _fetch_afx(self, exchange: str) -> list[dict]:
         market = AFX_MARKETS.get(exchange)
@@ -98,7 +91,7 @@ class AfricanMarketScanner:
                 log.warning(f"afx {exchange} returned {resp.status_code}")
                 return []
             tables = pd.read_html(resp.text)
-        except (ValueError, KeyError, requests.RequestException) as e:
+        except Exception as e:  # noqa: BLE001
             log.warning(f"afx {exchange} scrape failed: {e}")
             return []
 
@@ -152,28 +145,22 @@ class AfricanMarketScanner:
     # Public API
     # ------------------------------------------------------------------
     def get_quotes(self, exchange: str, cache_seconds: int = 300) -> list[dict]:
-        """Return quotes for one exchange, from the pan-African movers feed."""
+        """Return list of quotes. Mansa first, afx fallback. Cached."""
         now = time.time()
-        cached = self._cache.get("__pan_african__")
+        cached = self._cache.get(exchange)
         if cached and (now - cached[0]) < cache_seconds:
-            all_rows = cached[1]
-        else:
-            all_rows = self._fetch_mansa()
-            if all_rows:
-                self._cache["__pan_african__"] = (now, all_rows)
-                log.info(f"Mansa pan-african: {len(all_rows)} movers cached")
+            return cached[1]
 
-        # Filter by exchange locally
-        filtered = [r for r in all_rows if r.get("exchange") == exchange.upper()]
+        quotes = self._fetch_mansa(exchange)
+        source = "mansa"
+        if not quotes:
+            quotes = self._fetch_afx(exchange)
+            source = "afx"
 
-        # Optional fallback: try afx only if we have nothing at all from Mansa
-        if not filtered and exchange == "NSE":
-            try:
-                filtered = self._fetch_afx("NSE")
-            except (ValueError, KeyError, requests.RequestException):
-                pass
-
-        return filtered
+        if quotes:
+            log.info(f"{exchange}: {len(quotes)} quotes via {source}")
+            self._cache[exchange] = (now, quotes)
+        return quotes
 
     def generate_report(self, exchange: str) -> str:
         quotes = self.get_quotes(exchange)

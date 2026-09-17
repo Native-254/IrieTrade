@@ -1936,7 +1936,7 @@ class TradingEngine:
                 # Send to Telegram topic for this exchange
                 self.telegram.send_exchange_report(exchange, report)
                 # Also send to email
-                self.email.send_email(f"IrieTrade {exchange} Morning Report", report)
+                self.email.send_email(f"IrieTrade {exchange} Morning Report", report) # type: ignore
                 log.info(f"African {exchange} morning report disseminated")
             except Exception as e:  # noqa: BLE001
                 log.warning(f"Morning report failed for {exchange}: {e}")
@@ -1958,7 +1958,7 @@ class TradingEngine:
                 # Send to Telegram topic for this exchange
                 self.telegram.send_exchange_report(exchange, report)
                 # Also send to email
-                self.email.send_email(f"IrieTrade {exchange} Close Report", report)
+                self.email.send_email(f"IrieTrade {exchange} Close Report", report) # pyright: ignore[reportAttributeAccessIssue]
                 log.info(f"African {exchange} close report disseminated")
             except Exception as e:  # noqa: BLE001
                 log.warning(f"Close report failed for {exchange}: {e}")
