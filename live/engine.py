@@ -1977,9 +1977,26 @@ class TradingEngine:
             return
         log.info(f"Running crypto scanner for {broker_name}...")
         new_pairs = self.scanner.scan_crypto(exchange_name=broker_name)
+
+        # Define core crypto symbols that should always be traded
+        CORE_CRYPTO = {"BTC/USDT", "ETH/USDT", "BNB/USDT"}
+
         if new_pairs:
-            self.symbols_by_broker[broker_name] = new_pairs
-            log.success(f"{broker_name} symbols updated: {', '.join(new_pairs[:5])}...")
+            # Get current symbols for this broker to preserve core symbols
+            current_symbols = self.symbols_by_broker.get(broker_name, [])
+            # Extract core symbols from current list
+            core_symbols = [s for s in current_symbols if s in CORE_CRYPTO]
+            # Merge: core symbols + new scanner results (excluding any core symbols that might be in new_pairs)
+            merged = core_symbols + [p for p in new_pairs if p not in CORE_CRYPTO]
+            # Remove duplicates while preserving order
+            seen = set()
+            deduped = []
+            for symbol in merged:
+                if symbol not in seen:
+                    seen.add(symbol)
+                    deduped.append(symbol)
+            self.symbols_by_broker[broker_name] = deduped
+            log.success(f"{broker_name} symbols updated: {', '.join(deduped[:5])}...")
         else:
             log.warning(
                 f"Crypto scanner returned no symbols for {broker_name}; watchlist unchanged."
