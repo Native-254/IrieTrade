@@ -20,7 +20,6 @@ class TALibTrendStrategy(BaseStrategy):
     """
 
     def __init__(self, params: dict | None = None) -> None:
-        # Set self.params BEFORE calling super, so it is always defined
         self.params = params or {}
         super().__init__(self.params)
         self.macd_fast = int(self.params.get("macd_fast", 12))
@@ -34,11 +33,13 @@ class TALibTrendStrategy(BaseStrategy):
 
     def generate_signals(self, df: pd.DataFrame) -> pd.Series:
         if df.empty or len(df) < max(self.macd_slow, self.adx_period) + 5:
-            return pd.Series(Signal.HOLD, index=df.index)
+            empty = np.full(len(df), Signal.HOLD, dtype=object)
+            return pd.Series(empty, index=df.index)
 
-        close = df["close"].astype(float).values
-        high = df["high"].astype(float).values
-        low = df["low"].astype(float).values
+        # TA-Lib wants clean numpy arrays, not pandas-backed types
+        close = df["close"].astype(float).to_numpy(dtype=float)
+        high = df["high"].astype(float).to_numpy(dtype=float)
+        low = df["low"].astype(float).to_numpy(dtype=float)
 
         macd, macd_sig, _ = talib.MACD(
             close,
@@ -54,24 +55,26 @@ class TALibTrendStrategy(BaseStrategy):
         rsi_series = pd.Series(rsi, index=df.index)
         adx_series = pd.Series(adx, index=df.index)
 
-        cross_above = (macd_series > macd_sig_series) & (
+        cross_above = ((macd_series > macd_sig_series) & (
             macd_series.shift(1) <= macd_sig_series.shift(1)
-        )
-        cross_below = (macd_series < macd_sig_series) & (
+        )).to_numpy()
+        cross_below = ((macd_series < macd_sig_series) & (
             macd_series.shift(1) >= macd_sig_series.shift(1)
-        )
+        )).to_numpy()
 
-        trend_confirmed = adx_series > self.adx_threshold
-        not_overbought = rsi_series < self.rsi_overbought
-        not_oversold = rsi_series > self.rsi_oversold
+        trend_confirmed = (adx_series > self.adx_threshold).to_numpy()
+        not_overbought = (rsi_series < self.rsi_overbought).to_numpy()
+        not_oversold = (rsi_series > self.rsi_oversold).to_numpy()
 
-        signals = pd.Series(Signal.HOLD, index=df.index)
+        # Build the signal array directly — numpy is permissive with object dtype,
+        # pandas' stubs are not, so we wrap in a Series only at the end.
+        signals: np.ndarray = np.full(len(df), Signal.HOLD, dtype=object)
 
         signals[cross_above & trend_confirmed & not_overbought] = Signal.ENTER_LONG
         signals[cross_below & trend_confirmed & not_oversold] = Signal.ENTER_SHORT
 
-        # Exits on the opposite cross
+        # Exits applied last so they override entries when both fire on the same bar
         signals[cross_below] = Signal.EXIT_LONG
         signals[cross_above] = Signal.EXIT_SHORT
 
-        return signals.fillna(Signal.HOLD)
+        return pd.Series(signals, index=df.index)
