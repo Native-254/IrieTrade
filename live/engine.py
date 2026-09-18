@@ -13,8 +13,8 @@ import yfinance as yf
 from fastapi import FastAPI
 from pydantic import BaseModel
 
-from data.manager import DataManager
 from data.blotter import Blotter
+from data.manager import DataManager
 from execution.broker_manager import BrokerManager
 from monitoring.api import app as api_app
 from monitoring.api import set_trading_engine
@@ -252,7 +252,7 @@ class TradingEngine:
                                 # Store in blotter with 1h timeframe (adjust as needed)
                                 self.blotter.store_ohlcv(symbol, df, timeframe="1h")
                                 log.debug(f"Stored {len(df)} bars for {symbol} in blotter")
-                    except Exception as e:
+                    except Exception as e:  # noqa: BLE001
                         log.debug(f"Failed to capture data for {symbol} on {broker_name}: {e}")
                         continue
 
@@ -260,14 +260,13 @@ class TradingEngine:
             if self.african_enabled and self.african_scanner:
                 try:
                     # Get African symbols from config or scanner
-                    african_symbols = []
                     # This would need to be implemented based on how African symbols are stored
                     # For now, we'll skip this part as it's more complex
                     pass
-                except Exception as e:
+                except Exception as e:  # noqa: BLE001
                     log.debug(f"Failed to capture African market data: {e}")
 
-        except Exception as e:
+        except Exception as e:  # noqa: BLE001
             log.error(f"Error in _capture_market_data: {e}")
 
     def _get_bars(self, symbol: str, count: int = 100) -> pd.DataFrame:
@@ -307,7 +306,7 @@ class TradingEngine:
                 df = self.data_manager.get_bars(symbol, count=count)
                 if not df.empty:
                     return df
-        except Exception as e:
+        except Exception as e:  # noqa: BLE001
             log.debug(f"Failed to get live data for {symbol}: {e}")
 
         # If we got some blotter data but not enough, return what we have
@@ -1235,7 +1234,6 @@ class TradingEngine:
 
             latest_prices = {}
 
-            now_utc = datetime.now(timezone.utc)
             for sym, pos in list(pm.positions.items()):
                 if self._is_crypto(sym):
                     df = self._get_bars(sym, count=200)

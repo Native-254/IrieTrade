@@ -71,3 +71,23 @@ class DataManager:
                 interval="5m",
                 force_refresh=True,
             )
+
+    def get_bars(self, symbol: str, count: int = 100) -> pd.DataFrame:
+        """Get approximately the last 'count' bars of hourly data."""
+        # Calculate date range: we'll get 30 days of data to ensure we have enough bars
+        end_date = pd.Timestamp.now().strftime("%Y-%m-%d")
+        start_date = (pd.Timestamp.now() - pd.Timedelta(days=30)).strftime("%Y-%m-%d")
+
+        # Get hourly data
+        df = self.get_data(
+            symbol,
+            start_date=start_date,
+            end_date=end_date,
+            interval="1h",
+            force_refresh=False,  # Use cache if available
+        )
+
+        # Return the last 'count' bars
+        if not df.empty and len(df) > count:
+            return df.iloc[-count:]
+        return df
