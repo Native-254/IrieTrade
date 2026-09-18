@@ -3,6 +3,7 @@ import pandas as pd
 import yfinance as yf
 
 from data.provider import DataProvider
+from data.symbol_map import to_yahoo_symbol
 from utils.logger import log
 
 
@@ -11,9 +12,10 @@ class YahooFinanceProvider(DataProvider):
         self, symbol: str, start_date: str, end_date: str, interval: str = "1d"
     ) -> pd.DataFrame:
         """Fetches historical data from Yahoo Finance."""
+        yahoo_symbol = to_yahoo_symbol(symbol)
         log.info(f"Fetching {symbol} data from {start_date} to {end_date}")
         try:
-            ticker = yf.Ticker(symbol)
+            ticker = yf.Ticker(yahoo_symbol)
             df = ticker.history(start=start_date, end=end_date, interval=interval)
             if df.empty:
                 log.warning(f"No data found for {symbol}")
@@ -31,7 +33,7 @@ class YahooFinanceProvider(DataProvider):
     def get_realtime_quote(self, symbol: str) -> dict:
         """Fetches real-time quote. (Simplified)"""
         try:
-            ticker = yf.Ticker(symbol)
+            ticker = yf.Ticker(to_yahoo_symbol(symbol))
             info = ticker.fast_info
             return {
                 "symbol": symbol,

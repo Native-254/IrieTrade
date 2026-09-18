@@ -20,7 +20,9 @@ class TALibTrendStrategy(BaseStrategy):
     """
 
     def __init__(self, params: dict | None = None) -> None:
-        super().__init__(params)
+        # Set self.params BEFORE calling super, so it is always defined
+        self.params = params or {}
+        super().__init__(self.params)
         self.macd_fast = int(self.params.get("macd_fast", 12))
         self.macd_slow = int(self.params.get("macd_slow", 26))
         self.macd_signal = int(self.params.get("macd_signal", 9))

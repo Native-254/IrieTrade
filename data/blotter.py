@@ -80,26 +80,65 @@ class Blotter:
 
                 # Ensure timestamp column exists in milliseconds since epoch
                 if "timestamp" not in df_to_store.columns:
-                    if df_to_store.index.tz is None:
-                        timestamps = df_to_store.index.tz_localize("UTC")
+                    # Explicitly cast to DatetimeIndex so we can access tz attrs
+                    idx = pd.DatetimeIndex(df_to_store.index)
+                    if idx.tz is None:
+                        timestamps = idx.tz_localize("UTC")
                     else:
-                        timestamps = df_to_store.index.tz_convert("UTC")
+                        timestamps = idx.tz_convert("UTC")
                     df_to_store["timestamp"] = timestamps.astype("int64") // 10**6
 
-                # Select and add metadata columns
                 df_to_store = df_to_store[
                     ["timestamp", "open", "high", "low", "close", "volume"]
                 ].copy()
                 df_to_store["symbol"] = symbol
                 df_to_store["timeframe"] = timeframe
 
-                rows = df_to_store.to_dict(orient="records")
+                rows: list[tuple] = []
+                for _, row in df_to_store.iterrows():
+                    # Convert to Timestamp safely; skip rows that can't be parsed
+                    raw_ts = row["timestamp"]
+                    if raw_ts is None or pd.isna(raw_ts):
+                        continue
+                    try:
+                        ts_int = int(raw_ts)
+                    except (TypeError, ValueError) as e:
+                        log.debug(f"Blotter: skipped bad timestamp for {symbol}: {e}")
+                        continue
+
+                    # Mansa returns null for volume on illiquid African stocks;
+                    # the schema requires NOT NULL, so coalesce to 0.0.
+                    raw_volume = row.get("volume")
+                    try:
+                        volume = float(raw_volume) if raw_volume is not None else 0.0
+                    except (TypeError, ValueError):
+                        volume = 0.0
+
+                    try:
+                        rows.append(
+                            (
+                                symbol,
+                                timeframe,
+                                ts_int,
+                                float(row["open"]),
+                                float(row["high"]),
+                                float(row["low"]),
+                                float(row["close"]),
+                                volume,
+                            )
+                        )
+                    except (KeyError, TypeError, ValueError) as e:
+                        log.debug(f"Blotter: skipped malformed row for {symbol}: {e}")
+                        continue
+
+                if not rows:
+                    return 0
 
                 conn.executemany(
                     """
                     INSERT OR REPLACE INTO ohlcv
-                        (symbol, timestamp, open, high, low, close, volume, timeframe)
-                    VALUES (:symbol, :timestamp, :open, :high, :low, :close, :volume, :timeframe)
+                        (symbol, timeframe, timestamp, open, high, low, close, volume)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?)
                     """,
                     rows,
                 )
@@ -133,6 +172,11 @@ class Blotter:
         ts_ms = int(today.timestamp() * 1000)
         full_symbol = f"{exchange}:{symbol}"
 
+        try:
+            safe_volume = float(volume) if volume is not None else 0.0
+        except (TypeError, ValueError):
+            safe_volume = 0.0
+
         with self._lock:
             conn = sqlite3.connect(str(self.db_path))
             try:
@@ -149,7 +193,7 @@ class Blotter:
                         float(price),
                         float(price),
                         float(price),
-                        float(volume),
+                        safe_volume,
                         timeframe,
                     ),
                 )
@@ -234,7 +278,7 @@ class Blotter:
                     GROUP BY symbol, timeframe
                 """)
 
-                stats = {}
+                stats: dict[str, dict] = {}
                 for row in cursor.fetchall():
                     symbol, timeframe, count, min_ts, max_ts = row
                     key = f"{symbol}:{timeframe}"

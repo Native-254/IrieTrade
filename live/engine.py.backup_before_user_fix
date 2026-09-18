@@ -34,7 +34,6 @@ from strategies.orb import OpeningRangeBreakout
 from strategies.signals import Signal
 from strategies.sma_5_8_13 import SMA5813Strategy
 from strategies.stochastic import StochasticCross
-from strategies.talib_trend import TALibTrendStrategy
 from strategies.trend_following_long_only import TrendFollowingLongOnly
 from strategies.trend_following_ls import TrendFollowingLS
 from strategies.vwap_revisions import VWAPReversion
@@ -156,8 +155,6 @@ class TradingEngine:
                     loaded.append(IchimokuCloud(params))
                 elif name == "SMA5813":
                     loaded.append(SMA5813Strategy(params))
-                elif name == "TALibTrend":
-                    loaded.append(TALibTrendStrategy(params))
                 elif name == "Breakout":
                     log.warning("Breakout strategy not implemented – skipping.")
                 else:
@@ -524,10 +521,6 @@ class TradingEngine:
     def _earnings_nearby(self, symbol: str) -> bool:
         if self._is_crypto(symbol):
             return False
-        # Forex and metals have no earnings — skip the lookup
-        from data.symbol_map import is_mapped_derivative
-        if is_mapped_derivative(symbol):
-            return False
         if not self.config["execution"].get("earnings_avoidance", False):
             return False
         try:
@@ -854,21 +847,6 @@ class TradingEngine:
             constraints_fn = getattr(broker, "get_min_order_constraints", None)
             if callable(constraints_fn):
                 try:
-                    min_base, _ = constraints_fn(symbol)  # type: ignore
-                    if symbol not in self._dust_warned:
-                        log.warning(
-                            f"Skipping exit for {symbol}: quantity {filled_qty} "
-                            f"is below exchange minimum base size {min_base}."
-                        )
-                        self._dust_warned.add(symbol)
-                    else:
-                        log.debug(
-                            f"Skipping exit for {symbol}: quantity {filled_qty} "
-                            f"is below exchange minimum base size {min_base}."
-                        )
-                except Exception:  # noqa: BLE001, S110
-                    pass
-                try:
                         if symbol not in self._dust_warned:
                             log.warning(
                                 f"Skipping exit for {symbol}: quantity {filled_qty} "
@@ -1064,107 +1042,71 @@ class TradingEngine:
     # De-risking & rotation
     # ------------------------------------------------------------------
     def _enforce_risk_limits(self, broker, pm, rm, latest_prices: dict, capital: float):
-        """Reduce positions that breach risk limits.
-
-        For crypto brokers with a minimum base trade size, a partial reduction
-        that would leave dust is converted into a full close instead. This
-        prevents the hourly loop of "reduce 0.01 → below minimum → skip"
-        that otherwise repeats indefinitely.
-        """
+        """Reduce positions that breach risk limits."""
         max_single = capital * rm.config.get(
             "max_position_pct",
-            self.config["risk_management"]["max_position_pct"],
+            self.config["risk_management"].get("max_position_pct", 0.0),
         )
         max_gross = capital * rm.config.get(
             "max_gross_exposure",
-            self.config["risk_management"]["max_gross_exposure"],
+            self.config["risk_management"].get("max_gross_exposure", 0.0),
         )
         max_net = capital * rm.config.get(
             "max_net_exposure",
-            self.config["risk_management"]["max_net_exposure"],
+            self.config["risk_management"].get("max_net_exposure", 0.0),
         )
 
-        def _min_base(sym: str) -> float:
-            """Best-effort lookup of the broker's minimum base trade size."""
-            constraints_fn = getattr(broker, "get_min_order_constraints", None)
-            if not callable(constraints_fn):
-                return 0.0
-            try:
-                min_base, _ = constraints_fn(sym)  # type: ignore
-                return float(min_base or 0.0)
-            except Exception:  # noqa: BLE001
-                return 0.0
-
-        def _adjust_reduce_qty(sym: str, pos, price: float, requested: float) -> float:
-            """Return the quantity to reduce, upgrading to a full close when
-            a partial reduction would leave the position below min base size."""
-            qty = requested
-
-            # Stocks: whole shares only
-            if not self._is_crypto(sym):
-                return float(int(qty)) if qty >= 1 else 0.0
-
-            # Crypto: respect minimum base size on both sides of the trade
-            min_base = _min_base(sym)
-            if min_base <= 0:
-                return qty
-
-            remaining = pos.quantity - qty
-
-            # Case 1: the reduction itself is below the minimum → close fully
-            if qty < min_base:
-                log.warning(
-                    f"De-risk {sym}: reduction {qty:.8f} is below broker minimum "
-                    f"{min_base:.8f}; closing entire position instead."
-                )
-                return pos.quantity
-
-            # Case 2: the reduction is fine, but remaining would be dust → close fully
-            if remaining < min_base:
-                log.warning(
-                    f"De-risk {sym}: partial reduce would leave {remaining:.8f} "
-                    f"below minimum {min_base:.8f}; closing entire position instead."
-                )
-                return pos.quantity
-
-            return qty
-
-        # --------------------------------------------------------------
         # Single-name concentration
-        # --------------------------------------------------------------
         for sym, pos in list(pm.positions.items()):
             price = latest_prices.get(sym, pos.entry_price)
             if price <= 0:
                 continue
             notional = pos.quantity * price
-            if notional <= max_single + 1e-6:
-                continue
+            if notional > max_single + 1e-6:
+                excess = notional - max_single
+                reduce_qty = excess / price
 
-            excess = notional - max_single
-            reduce_qty = _adjust_reduce_qty(sym, pos, price, excess / price)
-            if reduce_qty <= 0:
-                log.debug(f"De-risk {sym}: no valid reduction quantity; skipping.")
-                continue
+                # IBKR only accepts whole stocks
+                if not self._is_crypto(sym):
+                    reduce_qty = int(reduce_qty)
+                    if reduce_qty <= 0:
+                        log.warning(
+                            f"De-risk reduction for {sym} is less than 1 share;"
+                            "unable to reduce further"
+                        )
+                        continue
+                else:
+                    # For crypto: if the remaining position would be below min base size,
+                    # just close the whole position instead of partially reducing.
+                    constraints_fn = getattr(broker, "get_min_order_constraints", None)
+                    if callable(constraints_fn):
+                        try:
+                            min_base, _ = constraints_fn(sym)
+                            remaining = pos.quantity - reduce_qty
+                            if min_base > 0 and remaining < min_base:
+                                log.warning(
+                                    f"De-risking {sym}: partial reduce would leave dust; "
+                                    f"closing entire position instead."
+                                )
+                                reduce_qty = pos.quantity
+                        except Exception as e:
+                            log.debug(f"Error checking min base size for {sym} in single-name limit: {e}")
+                            # If we can't get constraints, proceed with the calculated reduce_qty
+                            pass
 
-            side = "SELL" if pos.side == "BUY" else "BUY_TO_COVER"
-            log.warning(
-                f"De-risking {sym}: reducing {reduce_qty:.8f} to enforce "
-                f"single-name limit."
-            )
-            self._place_trade(
-                broker, pm, sym, side, reduce_qty, price, 0.0, 0.0, 0.0
-            )
+                side = "SELL" if pos.side == "BUY" else "BUY_TO_COVER"
+                log.warning(
+                    f"De-risking {sym}: reducing {reduce_qty:.2f} shares to enforce single-name limit."
+                )
+                self._place_trade(broker, pm, sym, side, reduce_qty, price, 0.0, 0.0, 0.0, strategy_name="Single Name Limit")
 
-        # --------------------------------------------------------------
         # Gross exposure
-        # --------------------------------------------------------------
         current_gross = rm.get_gross_exposure(latest_prices)
         if current_gross > max_gross + 1e-6:
             overage = current_gross - max_gross
             positions_sorted = sorted(
                 pm.positions.items(),
-                key=lambda kv: kv[1].quantity
-                * latest_prices.get(kv[0], kv[1].entry_price),
+                key=lambda kv: kv[1].quantity * latest_prices.get(kv[0], kv[1].entry_price),
                 reverse=True,
             )
             for sym, pos in positions_sorted:
@@ -1175,32 +1117,46 @@ class TradingEngine:
                     continue
                 notional = pos.quantity * price
                 reduce_notional = min(notional, overage)
-                raw_qty = reduce_notional / price
-                reduce_qty = _adjust_reduce_qty(sym, pos, price, raw_qty)
-                if reduce_qty <= 0:
-                    continue
+                reduce_qty = reduce_notional / price
+
+                if not self._is_crypto(sym):
+                    reduce_qty = int(reduce_qty)
+                    if reduce_qty <= 0:
+                        continue
+                else:
+                    # For crypto: if the remaining position would be below min base size,
+                    # just close the whole position instead of partially reducing.
+                    constraints_fn = getattr(broker, "get_min_order_constraints", None)
+                    if callable(constraints_fn):
+                        try:
+                            min_base, _ = constraints_fn(sym)
+                            remaining = pos.quantity - reduce_qty
+                            if min_base > 0 and remaining < min_base:
+                                log.warning(
+                                    f"De-risking gross: partial reduce would leave dust for {sym}; "
+                                    f"closing entire position instead."
+                                )
+                                reduce_qty = pos.quantity
+                        except Exception as e:
+                            log.debug(f"Error checking min base size for {sym} in gross limit: {e}")
+                            # If we can't get constraints, proceed with the calculated reduce_qty
+                            pass
 
                 side = "SELL" if pos.side == "BUY" else "BUY_TO_COVER"
                 log.warning(
-                    f"De-risking gross: reducing {sym} by {reduce_qty:.8f} "
-                    f"to lower total exposure."
+                    f"De-risking gross: reducing {sym} by {reduce_qty:.2f} to lower total exposure."
                 )
-                self._place_trade(
-                    broker, pm, sym, side, reduce_qty, price, 0.0, 0.0, 0.0
-                )
+                self._place_trade(broker, pm, sym, side, reduce_qty, price, 0.0, 0.0, 0.0, strategy_name="Gross Exposure Limit")
                 overage -= reduce_qty * price
 
-        # --------------------------------------------------------------
         # Net exposure
-        # --------------------------------------------------------------
         current_net = rm.get_net_exposure(latest_prices)
         if abs(current_net) > max_net + 1e-6:
             overage_net = abs(current_net) - max_net
             target_side = "BUY" if current_net > 0 else "SELL"
             positions_sorted = sorted(
                 pm.positions.items(),
-                key=lambda kv: kv[1].quantity
-                * latest_prices.get(kv[0], kv[1].entry_price),
+                key=lambda kv: kv[1].quantity * latest_prices.get(kv[0], kv[1].entry_price),
                 reverse=True,
             )
             for sym, pos in positions_sorted:
@@ -1213,20 +1169,38 @@ class TradingEngine:
                     continue
                 notional = pos.quantity * price
                 reduce_notional = min(notional, overage_net)
-                raw_qty = reduce_notional / price
-                reduce_qty = _adjust_reduce_qty(sym, pos, price, raw_qty)
-                if reduce_qty <= 0:
-                    continue
+                reduce_qty = reduce_notional / price
+
+                if not self._is_crypto(sym):
+                    reduce_qty = int(reduce_qty)
+                    if reduce_qty <= 0:
+                        continue
+                else:
+                    # For crypto: if the remaining position would be below min base size,
+                    # just close the whole position instead of partially reducing.
+                    constraints_fn = getattr(broker, "get_min_order_constraints", None)
+                    if callable(constraints_fn):
+                        try:
+                            min_base, _ = constraints_fn(sym)
+                            remaining = pos.quantity - reduce_qty
+                            if min_base > 0 and remaining < min_base:
+                                log.warning(
+                                    f"De-risking net: partial reduce would leave dust for {sym}; "
+                                    f"closing entire position instead."
+                                )
+                                reduce_qty = pos.quantity
+                        except Exception as e:
+                            log.debug(f"Error checking min base size for {sym} in net limit: {e}")
+                            # If we can't get constraints, proceed with the calculated reduce_qty
+                            pass
 
                 side = "SELL" if pos.side == "BUY" else "BUY_TO_COVER"
                 log.warning(
-                    f"De-risking net: reducing {sym} by {reduce_qty:.8f} "
-                    f"to lower net exposure."
+                    f"De-risking net: reducing {sym} by {reduce_qty:.2f} to lower net exposure."
                 )
-                self._place_trade(
-                    broker, pm, sym, side, reduce_qty, price, 0.0, 0.0, 0.0
-                )
+                self._place_trade(broker, pm, sym, side, reduce_qty, price, 0.0, 0.0, 0.0, strategy_name="Net Exposure Limit")
                 overage_net -= reduce_qty * price
+
     def _rotate_underperformers(
         self, broker, pm, latest_prices: dict, active_symbols: list[str]
     ):
@@ -2189,14 +2163,7 @@ class TradingEngine:
             except Exception as e:  # noqa: BLE001
                 log.warning(f"Close report failed for {exchange}: {e}")
 
-    def _ensure_clock_sync(self):
-        """Ensure system clock is synchronized to prevent broker rejections."""
-        import subprocess
-        try:
-            subprocess.run(["sudo", "systemctl", "restart", "systemd-timesyncd"], check=False, timeout=10)
-            log.debug("Clock synchronization completed")
-        except Exception as e:  # noqa: BLE001
-            log.debug(f"Clock resync failed: {e}")
+
 class HealthStatus(BaseModel):
     status: str
     ibkr_connected: bool

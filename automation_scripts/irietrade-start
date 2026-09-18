@@ -55,22 +55,27 @@ wait_for_port() {
 # ---- Pre-flight checks ------------------------------------------------
 log "Starting IrieTrade autonomous launcher..."
 
-# 1. Time sync (requires NOPASSWD sudoers rule - already configured per your notes)
-if check_command timedatectl; then
+# ---------- Force a fresh NTP sync ----------
+if command -v systemctl >/dev/null 2>&1; then
+    echo "Refreshing time sync..."
+    sudo systemctl restart systemd-timesyncd 2>/dev/null || true
+    sleep 3
+fi
+
+# ---------- Verify time synchronization ----------
+if command -v timedatectl >/dev/null 2>&1; then
     if ! timedatectl show -p NTPSynchronized --value | grep -q yes; then
-        log_json warn "Time not synchronized. Attempting to start systemd-timesyncd..."
-        sudo systemctl start systemd-timesyncd 2>/dev/null || true
-        sleep 3
+        echo "Time not yet synchronized. Waiting..."
+        sleep 5
         if ! timedatectl show -p NTPSynchronized --value | grep -q yes; then
-            log_json error "Time synchronization failed. Continuing anyway (may cause IBKR auth issues)."
+            echo "Warning: Time synchronization still not active."
+            timedatectl status || true
         else
-            log_json info "Time synchronized via systemd-timesyncd."
+            echo "Time synchronized."
         fi
     else
-        log_json info "Time already synchronized."
+        echo "Time already synchronized."
     fi
-else
-    log_json warn "timedatectl not found - skipping time sync check."
 fi
 
 # 2. Virtual environment validation
@@ -81,7 +86,7 @@ fi
 # Activate venv and verify key packages
 source "${VENV_DIR}/bin/activate"
 # Quick check that critical packages are installed (add/remove as needed)
-for pkg in ib_insync pandas numpy uvicorn fastapi; do
+for pkg in ib_async pandas numpy uvicorn fastapi; do
     if ! python -c "import $pkg" 2>/dev/null; then
         log_json error "Required package '${pkg}' missing in venv. Run: pip install ${pkg}"
         deactivate
