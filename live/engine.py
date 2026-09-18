@@ -14,6 +14,7 @@ from fastapi import FastAPI
 from pydantic import BaseModel
 
 from data.manager import DataManager
+from data.blotter import Blotter
 from execution.broker_manager import BrokerManager
 from monitoring.api import app as api_app
 from monitoring.api import set_trading_engine
@@ -200,6 +201,8 @@ class TradingEngine:
 
         self.trailing_stop_percent = 0.02
         self.is_running = False
+        # Blotter for persistent OHLCV storage
+        self.blotter = Blotter()
 
         # Read EOD and cap times from config (in UTC)
         risk_cfg = self.config.get("risk_management", {})
@@ -217,6 +220,102 @@ class TradingEngine:
         log.success("Trading Engine initialized.")
         global _engine_instance
         _engine_instance = self
+
+    def _capture_market_data(self):
+        """Capture market data from all brokers and store in blotter."""
+        try:
+            # Capture data for each broker
+            for broker_name, broker in self.broker_manager.iterate_all():
+                if not self.broker_available.get(broker_name, False):
+                    continue
+
+                # Get symbols for this broker
+                symbols = self.symbols_by_broker.get(broker_name, [])
+                if not symbols:
+                    continue
+
+                # Capture OHLCV data for each symbol
+                for symbol in symbols:
+                    try:
+                        # Get data based on broker type
+                        if self._is_crypto(symbol):
+                            df = self._get_crypto_data(broker, symbol, limit=100)
+                        else:
+                            # For traditional assets, use yfinance or data manager
+                            # For now, we'll use the data manager's get_bars method
+                            df = self.data_manager.get_bars(symbol, count=100)
+
+                        if not df.empty:
+                            # Ensure required columns exist
+                            required_cols = ['open', 'high', 'low', 'close', 'volume']
+                            if all(col in df.columns for col in required_cols):
+                                # Store in blotter with 1h timeframe (adjust as needed)
+                                self.blotter.store_ohlcv(symbol, df, timeframe="1h")
+                                log.debug(f"Stored {len(df)} bars for {symbol} in blotter")
+                    except Exception as e:
+                        log.debug(f"Failed to capture data for {symbol} on {broker_name}: {e}")
+                        continue
+
+            # Also capture data for African market symbols if enabled
+            if self.african_enabled and self.african_scanner:
+                try:
+                    # Get African symbols from config or scanner
+                    african_symbols = []
+                    # This would need to be implemented based on how African symbols are stored
+                    # For now, we'll skip this part as it's more complex
+                    pass
+                except Exception as e:
+                    log.debug(f"Failed to capture African market data: {e}")
+
+        except Exception as e:
+            log.error(f"Error in _capture_market_data: {e}")
+
+    def _get_bars(self, symbol: str, count: int = 100) -> pd.DataFrame:
+        """
+        Get OHLCV data for a symbol, preferring blotter data with fallback to live data.
+
+        Args:
+            symbol: Trading symbol
+            count: Number of bars to return
+
+        Returns:
+            DataFrame with OHLCV data
+        """
+        # Try to get data from blotter first
+        df = self.blotter.get_ohlcv(symbol, timeframe="1h", limit=count)
+
+        # If we have sufficient data from blotter, use it
+        if not df.empty and len(df) >= count * 0.8:  # At least 80% of requested data
+            log.debug(f"Using blotter data for {symbol}: {len(df)} bars")
+            return df
+
+        # Fallback to live data
+        log.debug(f"Falling back to live data for {symbol}")
+        try:
+            if self._is_crypto(symbol):
+                # For crypto, we need to get from broker
+                # Find a broker that has this symbol
+                for broker_name, broker in self.broker_manager.iterate_all():
+                    if self.broker_available.get(broker_name, False):
+                        symbol_in_broker = any(symbol in s for s in self.symbols_by_broker.get(broker_name, []))
+                        if symbol_in_broker:
+                            df = self._get_crypto_data(broker, symbol, limit=count)
+                            if not df.empty:
+                                return df
+            else:
+                # For traditional assets, use data manager
+                df = self.data_manager.get_bars(symbol, count=count)
+                if not df.empty:
+                    return df
+        except Exception as e:
+            log.debug(f"Failed to get live data for {symbol}: {e}")
+
+        # If we got some blotter data but not enough, return what we have
+        if not df.empty:
+            return df
+
+        # Return empty DataFrame if all else fails
+        return pd.DataFrame()
 
     # ------------------------------------------------------------------
     # Teardown & Restart
@@ -1139,15 +1238,9 @@ class TradingEngine:
             now_utc = datetime.now(timezone.utc)
             for sym, pos in list(pm.positions.items()):
                 if self._is_crypto(sym):
-                    df = self._get_crypto_data(broker, sym, limit=200)
+                    df = self._get_bars(sym, count=200)
                 else:
-                    df = self.data_manager.get_data(
-                        sym,
-                        start_date=(now_utc - timedelta(days=1)).strftime("%Y-%m-%d"),
-                        end_date=now_utc.strftime("%Y-%m-%d"),
-                        interval="15m",
-                        force_refresh=True,
-                    )
+                    df = self._get_bars(sym, count=200)
                 if df.empty:
                     continue
                 last_price = df["close"].iloc[-1]
@@ -1269,15 +1362,9 @@ class TradingEngine:
                         continue
 
                 if self._is_crypto(symbol):
-                    df = self._get_crypto_data(broker, symbol, limit=200)
+                    df = self._get_bars(symbol, count=200)
                 else:
-                    df = self.data_manager.get_data(
-                        symbol,
-                        start_date=(now_utc - timedelta(days=7)).strftime("%Y-%m-%d"),
-                        end_date=now_utc.strftime("%Y-%m-%d"),
-                        interval="15m",
-                        force_refresh=True,
-                    )
+                    df = self._get_bars(symbol, count=200)
                 if df.empty:
                     continue
                 last_price = df["close"].iloc[-1]
@@ -1637,7 +1724,10 @@ class TradingEngine:
         schedule.every().day.at(self.overnight_cap_utc_time).do(self._apply_overnight_cap)
         schedule.every().day.at(self.weekend_flatten_utc_time).do(self._apply_weekend_flatten)
 
-        
+        # Schedule market data capture for blotter (every 5 minutes)
+        schedule.every(5).minutes.do(self._capture_market_data)
+
+
         # Schedule African market reports and snapshots
         if self.african_enabled:
             african_cfg = self.config.get("african_scanner", {})

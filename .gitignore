@@ -2,6 +2,7 @@ venv/
 __pycache__/
 *.pyc
 logs/
+data/market.db
 data/raw/
 data/.encryption_key
 .env
