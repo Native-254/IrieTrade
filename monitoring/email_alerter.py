@@ -10,6 +10,10 @@ class EmailAlerter:
     THREAD_TRADES = "irietrade-trades@irietrade.me"
     THREAD_ERRORS = "irietrade-errors@irietrade.me"  # Single thread for all errors
 
+    # Static subjects — this is what email clients actually thread by
+    SUBJECT_TRADES = "[IrieTrade] Trade Alerts"
+    SUBJECT_ERRORS = "[IrieTrade] Errors"
+
     def __init__(self):
         self.sender = os.getenv("EMAIL_SENDER")
         self.api_key = os.getenv("EMAIL_BREVO_API_KEY")
@@ -68,7 +72,6 @@ class EmailAlerter:
 
     def send_trade_alert(self, symbol: str, action: str, quantity: int, price: float, source: str = ""):
         source_text = f" ({source})" if source else ""
-        subject = f"[IrieTrade Trades] {action} {quantity} {symbol} @ ${price:,.2f}{source_text}"
         action_color = "#00b894" if action in ("BUY", "BUY_TO_COVER") else "#e17055"
         body = f"""
         <html>
@@ -103,11 +106,10 @@ class EmailAlerter:
         </body>
         </html>
         """
-        self._send_with_thread(subject, body, self.THREAD_TRADES)
+        self._send_with_thread(self.SUBJECT_TRADES, body, self.THREAD_TRADES)
 
     def send_error_alert(self, error_msg: str, source: str = "general"):
         source = source.lower()
-        subject = f"IrieTrade Error [{source.upper()}]"
         body = f"""
         <html>
         <body style="font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; background-color: #0b111a; color: #dfe6e9; padding: 20px;">
@@ -123,7 +125,7 @@ class EmailAlerter:
         </body>
         </html>
         """
-        self._send_with_thread(subject, body, self.THREAD_ERRORS)
+        self._send_with_thread(self.SUBJECT_ERRORS, body, self.THREAD_ERRORS)
 
     def send_email(self, subject: str, body: str) -> None:
         """Send a generic email (used for reports)."""

@@ -516,6 +516,21 @@ class TradingEngine:
 
             min_notional = self._get_min_order_notional(broker, symbol)
             order_notional = filled_qty * slipped_price
+
+            # Base-size check (Kucoin enforces both base qty AND notional)
+            constraints_fn = getattr(broker, "get_min_order_constraints", None)
+            if callable(constraints_fn):
+                try:
+                    min_base, _ = constraints_fn(symbol) # type: ignore
+                    if min_base > 0 and filled_qty < min_base:
+                        log.warning(
+                            f"Skipping entry for {symbol}: quantity {filled_qty} "
+                            f"is below exchange minimum base size {min_base}."
+                        )
+                        return False
+                except Exception:  # noqa: BLE001, S110
+                    pass
+
             if min_notional > 0 and order_notional < min_notional:
                 log.warning(
                     f"Skipping entry for {symbol}: notional {order_notional:.8f} "
@@ -706,6 +721,41 @@ class TradingEngine:
             filled_qty = min(filled_qty, pos.quantity)
             min_notional = self._get_min_order_notional(broker, symbol)
             order_notional = filled_qty * last_price
+
+            # Base-size check (Kucoin enforces both base qty AND notional)
+            constraints_fn = getattr(broker, "get_min_order_constraints", None)
+            if callable(constraints_fn):
+                try:
+                    min_base, _ = constraints_fn(symbol) # pyright: ignore[reportGeneralTypeIssues]
+                    if min_base > 0 and filled_qty < min_base:
+                        log.warning(
+                            f"Skipping exit for {symbol}: quantity {filled_qty} "
+                            f"is below exchange minimum base size {min_base}."
+                        )
+                        # Calculate PnL for the dust position being removed
+                        if pos.entry_price <= 0:
+                            pnl_dollar = 0.0
+                        else:
+                            if pos.side == "BUY":
+                                pnl_dollar = (last_price - pos.entry_price) * pos.quantity
+                            else:  # SELL
+                                pnl_dollar = (pos.entry_price - last_price) * pos.quantity
+                        # Log the trade
+                        self._log_trade(
+                            symbol,
+                            action,
+                            pos.quantity,
+                            pos.entry_price,
+                            last_price,
+                            pnl_dollar,
+                            pos.side,
+                        )
+                        # Remove the position internally
+                        pm.close_position(symbol)
+                        return False
+                except Exception:  # noqa: BLE001, S110
+                    pass
+
             if min_notional > 0 and order_notional < min_notional:
                 # Calculate PnL for the dust position being removed
                 if pos.entry_price <= 0:
@@ -1276,6 +1326,13 @@ class TradingEngine:
                     elif Signal.ENTER_LONG in signals_set:
                         action = "BUY"
                     elif Signal.ENTER_SHORT in signals_set:
+                        # Spot-only brokers cannot short. Skip the signal entirely.
+                        if not getattr(broker, "supports_shorting", True):
+                            log.info(
+                                f"{symbol}: ENTER_SHORT ignored – "
+                                f"{broker.__class__.__name__} does not support shorting."
+                            )
+                            continue
                         action = "SELL_SHORT"
 
                 if action is None:
@@ -1572,7 +1629,7 @@ class TradingEngine:
                         self._run_crypto_scanner_for_broker,
                         broker_name=broker_name,
                     )
-            schedule.every().day.at(scan_time).do(self._run_clone_monitor)
+            # schedule.every().day.at(scan_time).do(self._run_clone_monitor)  # Disabled clone monitor - vanity metric
             schedule.every().day.at(scan_time).do(self._run_trending_scanner)
 
         # Schedule EOD risk report and time-based caps
@@ -1580,14 +1637,7 @@ class TradingEngine:
         schedule.every().day.at(self.overnight_cap_utc_time).do(self._apply_overnight_cap)
         schedule.every().day.at(self.weekend_flatten_utc_time).do(self._apply_weekend_flatten)
 
-        # Schedule NSE reports
-        if self.nse_enabled and self.nse_report_generator:
-            nse_cfg = self.config.get("nse", {})
-            report_times = nse_cfg.get("report_times", {})
-            schedule.every().day.at(report_times.get("morning", "05:45")).do(self._run_nse_morning_report)
-            schedule.every().day.at(report_times.get("midday", "09:30")).do(self._run_nse_midday_report)
-            schedule.every().day.at(report_times.get("close", "12:15")).do(self._run_nse_close_report)
-
+        
         # Schedule African market reports and snapshots
         if self.african_enabled:
             african_cfg = self.config.get("african_scanner", {})
@@ -1856,47 +1906,10 @@ class TradingEngine:
         else:
             log.warning("Trending scanner returned no symbols.")
 
-    # NSE Report Methods
-    def _run_nse_morning_report(self):
-        """Generate and disseminate NSE morning brief."""
-        log.info("Generating NSE morning report...")
-        if not self.nse_report_generator:
-            log.warning("NSE report generator not available")
-            return
-        report = self.nse_report_generator.generate_morning_note()
-        # Send to all NSE channels: Discord NSE webhook, Telegram NSE topic, Email
-        self._disseminate_nse_report(report, "morning")
-        log.info("NSE morning report disseminated")
-
-    def _run_nse_midday_report(self):
-        """Generate and disseminate NSE midday pulse."""
-        log.info("Generating NSE midday report...")
-        if not self.nse_report_generator:
-            log.warning("NSE report generator not available")
-            return
-        # For midday, we might want a shorter report, but for simplicity we use the same scanner data
-        # We'll create a simple pulse message
-        candidates = self.nse_scanner.scan() # type: ignore
-        if not candidates:
-            pulse = "No NSE data available for midday pulse."
-        else:
-            pulse_lines = [
-                f"{c['ticker']}: {c['price']:.2f} KES, 5d {c['chg_5d']:+.2f}%"
-                for c in candidates
-            ]
-            pulse = "📈 *NSE Midday Pulse*\n\n" + "\n".join(pulse_lines) + "\n\nNot financial advice."
-        self._disseminate_nse_report(pulse, "midday")
-        log.info("NSE midday report disseminated")
-
-    def _run_nse_close_report(self):
-        """Generate and disseminate NSE close summary."""
-        log.info("Generating NSE close report...")
-        if not self.nse_report_generator:
-            log.warning("NSE report generator not available")
-            return
-        report = self.nse_report_generator.generate_morning_note()  # Reuse morning note for simplicity; could be enhanced
-        self._disseminate_nse_report(report, "close")
-        log.info("NSE close report disseminated")
+    # NSE Report Methods - Removed as superseded by African market scanner with Mansa API
+    # The NSE report methods (_run_nse_morning_report, _run_nse_midday_report, _run_nse_close_report)
+    # have been removed because the African market scanner now handles NSE data via Mansa API.
+    # The _disseminate_nse_report method is kept for use by African market reporting.
 
     def _disseminate_nse_report(self, report: str, report_type: str):
         """Send NSE report to configured channels."""

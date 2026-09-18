@@ -14,3 +14,6 @@ engine.py.backup
 monitoring/api.backup
 .env.backup
 kucoin_broker.py.backup
+os
+json
+requests

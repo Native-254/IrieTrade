@@ -35,11 +35,11 @@ trading_engine = None
 
 def _post_ai_request(api_url: str, api_key: str, payload: dict) -> dict:
     """Make a POST request to the AI API (supports both OpenAI and Gemini formats).
-    
-    For Gemini: api_key is added as query parameter, payload format is adjusted.
+
+    For Gemini: api_key is added as x-goog-api-key header, payload format is adjusted.
     For OpenAI: api_key is used as Bearer token, payload format is as-is.
     """
-    
+
     # Check if this is a Gemini API URL
     parsed = urlparse(api_url)
     is_gemini = (
@@ -47,12 +47,13 @@ def _post_ai_request(api_url: str, api_key: str, payload: dict) -> dict:
         and parsed.netloc == "generativelanguage.googleapis.com"
         and parsed.path.endswith(":generateContent")
     )
-    
+
     if is_gemini:
         # Gemini API format
         # Remove model from payload as it's specified in the URL
         payload_copy = {k: v for k, v in payload.items() if k != "model"}
-        
+        model = payload_copy.pop("model", None)
+
         # Convert OpenAI messages format to Gemini contents format
         messages = payload_copy.pop("messages", [])
         contents = []
@@ -71,26 +72,28 @@ def _post_ai_request(api_url: str, api_key: str, payload: dict) -> dict:
                     "role": "user",
                     "parts": [{"text": msg["content"]}]
                 })
-        
+
         # If no contents were created, create a default one
         if not contents:
             contents = [{"role": "user", "parts": [{"text": ""}]}]
-        
+
         gemini_payload = {
             "contents": contents,
             "generationConfig": {
                 "temperature": payload_copy.get("temperature", 0.2)
             }
         }
-        
-        # Add API key as query parameter
-        separator = "&" if "?" in api_url else "?"
-        request_url = f"{api_url}{separator}key={api_key}"
-        
+
+        # Build Gemini URL from model (fallback to api_url if model not in payload)
+        gemini_model = model or os.getenv("AI_MODEL", "gemini-3.6-flash")
+        gemini_url = f"https://generativelanguage.googleapis.com/v1beta/models/{gemini_model}:generateContent"
+
+        # Add API key as header (not query parameter)
         request = UrlRequest(
-            request_url,
+            gemini_url,
             data=json.dumps(gemini_payload).encode("utf-8"),
             headers={
+                "x-goog-api-key": api_key,
                 "Content-Type": "application/json",
             },
             method="POST",
@@ -106,10 +109,10 @@ def _post_ai_request(api_url: str, api_key: str, payload: dict) -> dict:
             },
             method="POST",
         )
-    
+
     with urlopen(request, timeout=20) as response:
         response_data = json.loads(response.read().decode("utf-8"))
-        
+
         # Convert response to OpenAI-like format for consistency
         if is_gemini:
             # Extract text from Gemini response
@@ -120,7 +123,7 @@ def _post_ai_request(api_url: str, api_key: str, payload: dict) -> dict:
                     parts = candidate["content"]["parts"]
                     if len(parts) > 0:
                         text = parts[0].get("text", "")
-            
+
             return {
                 "choices": [{
                     "message": {

@@ -146,13 +146,24 @@ class KucoinBroker(Broker):
             "avg_price": order["average"],
         }
 
-    def get_min_order_notional(self, symbol: str) -> float:
+    def get_min_order_constraints(self, symbol: str) -> tuple[float, float]:
+        """Return (min_base_qty, min_notional) for a symbol."""
         if not self.connected:
             self.connect()
         assert self.exchange is not None
-        market = self.exchange.market(symbol)
-        min_cost = market.get("limits", {}).get("cost", {}).get("min")
-        return float(str(min_cost)) if min_cost else 0.0
+        try:
+            market = self.exchange.market(symbol)
+            limits = market.get("limits", {})
+            min_base = float(limits.get("amount", {}).get("min") or 0.0)
+            min_cost = float(limits.get("cost", {}).get("min") or 0.0)
+            return min_base, min_cost
+        except Exception:
+            return 0.0, 0.0
+
+    # Keep this for backward compatibility with the engine
+    def get_min_order_notional(self, symbol: str) -> float:
+        _, min_cost = self.get_min_order_constraints(symbol)
+        return min_cost
 
     def place_bracket_long(
         self,
