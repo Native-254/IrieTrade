@@ -73,21 +73,30 @@ class DataManager:
             )
 
     def get_bars(self, symbol: str, count: int = 100) -> pd.DataFrame:
-        """Get approximately the last 'count' bars of hourly data."""
-        # Calculate date range: we'll get 30 days of data to ensure we have enough bars
+        """Get approximately the last 'count' bars of 15m data."""
+        # Calculate date range: we'll get 10 days of data to ensure we have enough bars
+        # (10 days * 24 hours * 4 bars per hour = 960 bars)
         end_date = pd.Timestamp.now().strftime("%Y-%m-%d")
-        start_date = (pd.Timestamp.now() - pd.Timedelta(days=30)).strftime("%Y-%m-%d")
+        start_date = (pd.Timestamp.now() - pd.Timedelta(days=10)).strftime("%Y-%m-%d")
 
-        # Get hourly data
+        # Get 15m data
         df = self.get_data(
             symbol,
             start_date=start_date,
             end_date=end_date,
-            interval="1h",
+            interval="15m",
             force_refresh=False,  # Use cache if available
         )
 
         # Return the last 'count' bars
         if not df.empty and len(df) > count:
-            return df.iloc[-count:]
+            df = df.iloc[-count:]
+
+        # Ensure the index is timezone-aware UTC
+        tz = getattr(df.index, 'tz', None)
+        if tz is None:
+            df = df.tz_localize('UTC')
+        else:
+            df = df.tz_convert('UTC')
+
         return df

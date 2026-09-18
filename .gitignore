@@ -3,6 +3,7 @@ __pycache__/
 *.pyc
 logs/
 data/market.db
+data/test_market_15m.db
 data/raw/
 data/.encryption_key
 .env

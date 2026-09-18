@@ -249,8 +249,8 @@ class TradingEngine:
                             # Ensure required columns exist
                             required_cols = ['open', 'high', 'low', 'close', 'volume']
                             if all(col in df.columns for col in required_cols):
-                                # Store in blotter with 1h timeframe (adjust as needed)
-                                self.blotter.store_ohlcv(symbol, df, timeframe="1h")
+                                # Store in blotter with 15m timeframe
+                                self.blotter.store_ohlcv(symbol, df, timeframe="15m")
                                 log.debug(f"Stored {len(df)} bars for {symbol} in blotter")
                     except Exception as e:  # noqa: BLE001
                         log.debug(f"Failed to capture data for {symbol} on {broker_name}: {e}")
@@ -259,10 +259,32 @@ class TradingEngine:
             # Also capture data for African market symbols if enabled
             if self.african_enabled and self.african_scanner:
                 try:
-                    # Get African symbols from config or scanner
-                    # This would need to be implemented based on how African symbols are stored
-                    # For now, we'll skip this part as it's more complex
-                    pass
+                    from datetime import datetime, timezone
+                    # Capture African market snapshots (daily)
+                    for exchange in ["NSE", "JSE", "NGX", "GSE", "BRVM"]:
+                        try:
+                            quotes = self.african_scanner.get_quotes(exchange)
+                            for q in quotes:
+                                symbol = q.get("symbol")
+                                price = q.get("price")
+                                if not symbol or price is None:
+                                    continue
+                                # Create a DataFrame for this symbol with one row (daily snapshot)
+                                # We'll use the current date at midnight UTC as the timestamp
+                                today = datetime.now(timezone.utc).replace(hour=0, minute=0, second=0, microsecond=0)
+                                df = pd.DataFrame({
+                                    'open': [price],
+                                    'high': [price],
+                                    'low': [price],
+                                    'close': [price],
+                                    'volume': [q.get("volume", 0.0)]
+                                }, index=[today])
+                                # Store in blotter with timeframe="1d"
+                                # Prefix with exchange to avoid symbol collisions across exchanges
+                                self.blotter.store_ohlcv(f"{exchange}:{symbol}", df, timeframe="1d")
+                                log.debug(f"Stored African snapshot for {exchange}:{symbol}")
+                        except Exception as e:  # noqa: BLE001
+                            log.debug(f"African capture failed for {exchange}: {e}")
                 except Exception as e:  # noqa: BLE001
                     log.debug(f"Failed to capture African market data: {e}")
 
@@ -281,7 +303,7 @@ class TradingEngine:
             DataFrame with OHLCV data
         """
         # Try to get data from blotter first
-        df = self.blotter.get_ohlcv(symbol, timeframe="1h", limit=count)
+        df = self.blotter.get_ohlcv(symbol, timeframe="15m", limit=count)
 
         # If we have sufficient data from blotter, use it
         if not df.empty and len(df) >= count * 0.8:  # At least 80% of requested data
