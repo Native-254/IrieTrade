@@ -5,6 +5,7 @@ import time
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
+import ccxt
 import numpy as np
 import pandas as pd
 import schedule
@@ -414,20 +415,35 @@ class TradingEngine:
         if broker.exchange is None:
             log.warning(f"Could not connect to broker for crypto data: {symbol}")
             return pd.DataFrame()
-        try:
-            ohlcv = broker.exchange.fetch_ohlcv(symbol, timeframe='15m', limit=limit)
-            if not ohlcv:
+
+        # Retry-on-429 with backoff for rate limits
+        for attempt in range(3):
+            try:
+                ohlcv = broker.exchange.fetch_ohlcv(symbol, timeframe='15m', limit=limit)
+                if not ohlcv:
+                    return pd.DataFrame()
+                break
+            except ccxt.RateLimitExceeded as e:
+                if attempt == 2:  # Last attempt
+                    log.warning(f"Failed to fetch crypto data for {symbol} after 3 attempts due to rate limit: {e}")
+                    return pd.DataFrame()
+                wait_time = 3 * (attempt + 1)
+                log.warning(f"Rate limit exceeded for {symbol}, retrying in {wait_time}s... (attempt {attempt + 1}/3)")
+                time.sleep(wait_time)
+            except Exception as e:  # noqa: BLE001
+                log.warning(f"Failed to fetch crypto data for {symbol}: {e}")
                 return pd.DataFrame()
-            df = pd.DataFrame(
-                ohlcv,
-                columns=['timestamp', 'open', 'high', 'low', 'close', 'volume']
-            )
-            df['timestamp'] = pd.to_datetime(df['timestamp'], unit='ms', utc=True)
-            df.set_index('timestamp', inplace=True)
-            return df
-        except Exception as e:  # noqa: BLE001
-            log.warning(f"Failed to fetch crypto data for {symbol}: {e}")
+        else:
+            # This block runs if we didn't break out of the loop (all attempts failed)
             return pd.DataFrame()
+
+        df = pd.DataFrame(
+            ohlcv,
+            columns=['timestamp', 'open', 'high', 'low', 'close', 'volume']
+        )
+        df['timestamp'] = pd.to_datetime(df['timestamp'], unit='ms', utc=True)
+        df.set_index('timestamp', inplace=True)
+        return df
 
     def _is_crypto(self, symbol: str) -> bool:
         """Heuristic: crypto pairs contain a '/'."""
@@ -850,59 +866,48 @@ class TradingEngine:
             min_notional = self._get_min_order_notional(broker, symbol)
             order_notional = filled_qty * last_price
 
-            # Base-size check (Kucoin enforces both base qty AND notional)
+            # Base-size check (Kucoin enforces both base qty AND notional).
+            # Only skip when the position is genuinely too small to trade.
             constraints_fn = getattr(broker, "get_min_order_constraints", None)
             if callable(constraints_fn):
                 try:
                     min_base, _ = constraints_fn(symbol)  # type: ignore
+                except Exception:  # noqa: BLE001
+                    min_base = 0.0
+
+                if min_base > 0 and filled_qty < min_base:
+                    # Genuine dust — remove from internal tracking and move on.
                     if symbol not in self._dust_warned:
                         log.warning(
                             f"Skipping exit for {symbol}: quantity {filled_qty} "
-                            f"is below exchange minimum base size {min_base}."
+                            f"is below exchange minimum base size {min_base}; "
+                            f"removed dust position."
                         )
                         self._dust_warned.add(symbol)
                     else:
                         log.debug(
-                            f"Skipping exit for {symbol}: quantity {filled_qty} "
-                            f"is below exchange minimum base size {min_base}."
+                            f"Skipping exit for {symbol}: dust ({filled_qty} < {min_base})"
                         )
-                except Exception:  # noqa: BLE001, S110
-                    pass
-                try:
-                        if symbol not in self._dust_warned:
-                            log.warning(
-                                f"Skipping exit for {symbol}: quantity {filled_qty} "
-                                f"is below exchange minimum base size {min_base}."
-                            )
-                            self._dust_warned.add(symbol)
-                        else:
-                            log.debug(
-                                f"Skipping exit for {symbol}: quantity {filled_qty} "
-                                f"is below exchange minimum base size {min_base}."
-                            )
-                        # Calculate PnL for the dust position being removed
-                        if pos.entry_price <= 0:
-                            pnl_dollar = 0.0
-                        else:
-                            if pos.side == "BUY":
-                                pnl_dollar = (last_price - pos.entry_price) * pos.quantity
-                            else:  # SELL
-                                pnl_dollar = (pos.entry_price - last_price) * pos.quantity
-                        # Log the trade
-                        self._log_trade(
-                            symbol,
-                            action,
-                            pos.quantity,
-                            pos.entry_price,
-                            last_price,
-                            pnl_dollar,
-                            pos.side,
-                        )
-                        # Remove the position internally
-                        pm.close_position(symbol)
-                        return False
-                except Exception:  # noqa: BLE001, S110
-                    pass
+
+                    # Compute P&L for the trade log
+                    if pos.entry_price <= 0:
+                        pnl_dollar = 0.0
+                    elif pos.side == "BUY":
+                        pnl_dollar = (last_price - pos.entry_price) * pos.quantity
+                    else:
+                        pnl_dollar = (pos.entry_price - last_price) * pos.quantity
+
+                    self._log_trade(
+                        symbol,
+                        action,
+                        pos.quantity,
+                        pos.entry_price,
+                        last_price,
+                        pnl_dollar,
+                        pos.side,
+                    )
+                    pm.close_position(symbol)
+                    return False
 
             if min_notional > 0 and order_notional < min_notional:
                 # Calculate PnL for the dust position being removed
@@ -1012,7 +1017,7 @@ class TradingEngine:
                     )
                     broker_label = self._get_broker_source(broker)
 
-                self.email.send_trade_alert(symbol, action, filled_qty, avg_price, source=broker_label)
+                self.email.send_trade_alert(symbol, action, filled_qty, avg_price)
                 if action == "SELL":
                     direction_emoji = "🔵"
                     direction_text = "CLOSED"
@@ -1025,7 +1030,7 @@ class TradingEngine:
                 hours = int(total_seconds // 3600)
                 minutes = int((total_seconds % 3600) // 60)
                 pnl_amount = pnl_dollar
-                strategy_display = strategy_name if strategy_name is not None else "Unknown"
+                strategy_display = getattr(self, "_current_strategy_name", "") or "EXIT"
                 # Format P&L with more precision for small values
                 if abs(pnl_amount) < 0.01:
                     pnl_amount_str = f"{pnl_amount:+.4f}"
@@ -1095,7 +1100,7 @@ class TradingEngine:
             except Exception:  # noqa: BLE001
                 return 0.0
 
-        def _adjust_reduce_qty(sym: str, pos, price: float, requested: float) -> float:
+        def _adjust_reduce_qty(sym: str, pos, _price: float, requested: float) -> float:
             """Return the quantity to reduce, upgrading to a full close when
             a partial reduction would leave the position below min base size."""
             qty = requested
@@ -1327,6 +1332,17 @@ class TradingEngine:
                 continue
 
             capital = float(account["net_liquidation"])  # pyright: ignore[reportArgumentType] # type: ignore
+
+            # Guard: IBKR occasionally reports 0 (or NaN) for NetLiquidation during
+            # reconnections or when accountValues() returns an empty list. Treating
+            # that as a real capital drop would halt trading and corrupt daily P&L.
+            if not np.isfinite(capital) or capital <= 0:
+                log.warning(
+                    f"Broker '{broker_name}' reported invalid capital "
+                    f"({capital}); skipping portfolio update this iteration."
+                )
+                continue
+
             rm.update_portfolio(capital - rm.current_capital, 0)
             if not rm.can_trade():
                 log.warning(
@@ -1740,10 +1756,13 @@ class TradingEngine:
 
                     # If we have a KucoinBroker and the avg_cost is zero or invalid, try to get the average cost from trade history
                     if avg_cost <= 0.0 and hasattr(broker, 'get_average_cost') and self._is_crypto(sym):
-                        avg_cost_from_trades, last_trade_time = broker.get_average_cost(sym)
-                        if avg_cost_from_trades > 0.0:
-                            entry_price = avg_cost_from_trades
-                            entry_time = last_trade_time
+                        try:
+                            avg_cost_from_trades, last_trade_time = broker.get_average_cost(sym)
+                            if avg_cost_from_trades > 0.0:
+                                entry_price = avg_cost_from_trades
+                                entry_time = last_trade_time
+                        except Exception as e:  # noqa: BLE001
+                            log.debug(f"Failed to get average cost from trade history for {sym}: {e}")
 
                     pm.open_position(
                         Position(
@@ -1830,8 +1849,8 @@ class TradingEngine:
         schedule.every().day.at(self.overnight_cap_utc_time).do(self._apply_overnight_cap)
         schedule.every().day.at(self.weekend_flatten_utc_time).do(self._apply_weekend_flatten)
 
-        # Schedule market data capture for blotter (every 5 minutes)
-        schedule.every(5).minutes.do(self._capture_market_data)
+        # Schedule market data capture for blotter (every 15 minutes)
+        schedule.every(15).minutes.do(self._capture_market_data)
 
 
         # Schedule African market reports and snapshots
@@ -2148,46 +2167,92 @@ class TradingEngine:
         log.info("African market snapshots captured")
 
     def _run_african_morning_reports(self):
-        """Generate and disseminate African market morning briefs for all exchanges."""
-        if not self.african_scanner:
-            log.warning("African market scanner not available")
+        if self.african_scanner is None:
             return
+
         log.info("Generating African market morning reports...")
-        # Generate reports for each enabled exchange
-        african_cfg = self.config.get("african_scanner", {})
-        exchanges = african_cfg.get("exchanges", ["NSE", "JSE", "NGX", "GSE", "BRVM"])
-        for exchange in exchanges:
+        briefs = {}
+
+        for exchange in ["NSE", "JSE", "NGX", "GSE", "BRVM"]:
             try:
                 report = self.african_scanner.generate_report(exchange)
-                # Send to Telegram topic for this exchange
+                insight = self._african_insight(exchange, report)
+                briefs[exchange] = {"report": report, "insight": insight}
+                # Still post to Telegram topic for that exchange
                 self.telegram.send_exchange_report(exchange, report)
-                # Also send to email
-                self.email.send_email(f"IrieTrade {exchange} Morning Report", report) # type: ignore
-                log.info(f"African {exchange} morning report disseminated")
             except Exception as e:  # noqa: BLE001
-                log.warning(f"Morning report failed for {exchange}: {e}")
+                log.warning(f"African report failed for {exchange}: {e}")
+
+        if briefs:
+            self.email.send_africa_brief(briefs)
+            log.info(f"African briefs sent: {len(briefs)} exchanges in one email")
 
     def _run_african_close_report(self):
-        """Generate and disseminate African market close summaries for all exchanges."""
-        if not self.african_scanner:
-            log.warning("African market scanner not available")
+        if self.african_scanner is None:
             return
+
         log.info("Generating African market close reports...")
-        # Capture snapshots first (for indicator calculation)
-        self._capture_african_snapshots()
-        # Generate reports for each enabled exchange
-        african_cfg = self.config.get("african_scanner", {})
-        exchanges = african_cfg.get("exchanges", ["NSE", "JSE", "NGX", "GSE", "BRVM"])
-        for exchange in exchanges:
+        briefs = {}
+
+        for exchange in ["NSE", "JSE", "NGX", "GSE", "BRVM"]:
             try:
                 report = self.african_scanner.generate_report(exchange)
-                # Send to Telegram topic for this exchange
+                insight = self._african_insight(exchange, report)
+                briefs[exchange] = {"report": report, "insight": insight}
+                # Still post to Telegram topic for that exchange
                 self.telegram.send_exchange_report(exchange, report)
-                # Also send to email
-                self.email.send_email(f"IrieTrade {exchange} Close Report", report) # pyright: ignore[reportAttributeAccessIssue]
-                log.info(f"African {exchange} close report disseminated")
             except Exception as e:  # noqa: BLE001
-                log.warning(f"Close report failed for {exchange}: {e}")
+                log.warning(f"African report failed for {exchange}: {e}")
+
+        if briefs:
+            self.email.send_africa_brief(briefs)
+            log.info(f"African briefs sent: {len(briefs)} exchanges in one email")
+
+    def _african_insight(self, exchange: str, report: str) -> str:
+        """Ask the LLM for a one-paragraph take on the exchange's top movers."""
+        try:
+            # Get AI configuration from environment
+            api_key = os.getenv("AI_API_KEY")
+            if not api_key:
+                return ""
+
+            api_url = os.getenv("AI_API_URL", "https://api.openai.com/v1/chat/completions")
+            model = os.getenv("AI_MODEL", "gpt-4o-mini")
+
+            # Create payload similar to the /api/assistant endpoint
+            payload = {
+                "model": model,
+                "temperature": 0.2,
+                "messages": [
+                    {
+                        "role": "system",
+                        "content": (
+                            "You are a conservative market analyst. Provide brief, factual insights "
+                            "based only on the provided data. Do not invent or exaggerate information."
+                        ),
+                    },
+                    {
+                        "role": "user",
+                        "content": (
+                            f"You are a conservative market analyst. Below is today's {exchange} brief. "
+                            f"Write 2 sentences on which 1-2 tickers look strongest for a swing position, "
+                            f"and why. Do not invent data. If the list doesn't show clear momentum, say so.\n\n"
+                            f"{report}"
+                        ),
+                    },
+                ],
+            }
+
+            # Import the AI request function locally to avoid circular imports
+            from monitoring.api import _post_ai_request
+
+            # Make the AI request
+            result = _post_ai_request(api_url, api_key, payload)
+            out = result["choices"][0]["message"]["content"].strip()
+            return out if out else ""
+        except Exception as e:  # noqa: BLE001
+            log.debug(f"African insight LLM failed for {exchange}: {e}")
+            return ""
 
     def _ensure_clock_sync(self):
         """Ensure system clock is synchronized to prevent broker rejections."""
@@ -2195,7 +2260,7 @@ class TradingEngine:
         try:
             subprocess.run(["sudo", "systemctl", "restart", "systemd-timesyncd"], check=False, timeout=10)
             log.debug("Clock synchronization completed")
-        except Exception as e:  # noqa: BLE001
+        except (subprocess.SubprocessError, OSError) as e:
             log.debug(f"Clock resync failed: {e}")
 class HealthStatus(BaseModel):
     status: str

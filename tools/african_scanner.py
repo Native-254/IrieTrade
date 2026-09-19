@@ -41,6 +41,7 @@ class AfricanMarketScanner:
         self.api_key = os.getenv(cfg.get("mansa_api_key_env", "MANSA_API_KEY"), "")
         self.top_n = cfg.get("top_n", 5)
         self._cache: dict[str, tuple[float, list[dict]]] = {}
+        self.use_afx_fallback = False  # Disable afx fallback by default; enable only if Mansa is down
 
     # ------------------------------------------------------------------
     # Mansa
@@ -144,7 +145,7 @@ class AfricanMarketScanner:
     # ------------------------------------------------------------------
     # Public API
     # ------------------------------------------------------------------
-    def get_quotes(self, exchange: str, cache_seconds: int = 300) -> list[dict]:
+    def get_quotes(self, exchange: str, cache_seconds: int = 21600) -> list[dict]:
         """Return list of quotes. Mansa first, afx fallback. Cached."""
         now = time.time()
         cached = self._cache.get(exchange)
@@ -153,7 +154,7 @@ class AfricanMarketScanner:
 
         quotes = self._fetch_mansa(exchange)
         source = "mansa"
-        if not quotes:
+        if not quotes and self.use_afx_fallback:
             quotes = self._fetch_afx(exchange)
             source = "afx"
 

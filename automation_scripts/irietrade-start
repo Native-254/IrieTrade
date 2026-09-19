@@ -22,18 +22,14 @@ log() {
 }
 
 log_json() {
-    # Output a single-line JSON log for easy parsing
+    # Emit a loguru-style line: "YYYY-MM-DD HH:MM:SS | LEVEL    | launcher - message"
     local level="$1"; shift
     local message="$*"
-    # Use jq if available, otherwise fallback to simple echo
-    if command -v jq >/dev/null 2>&1; then
-        jq -n --arg ts "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
-             --arg lvl "$level" \
-             --arg msg "$message" \
-             '{timestamp: $ts, level: $lvl, message: $msg}'
-    else
-        echo "{\"timestamp\":\"$(date -u +%Y-%m-%dT%H:%M:%SZ)\",\"level\":\"$level\",\"message\":\"$message\"}"
-    fi
+    printf '%s | %-8s | %s - %s\n' \
+        "$(date '+%Y-%m-%d %H:%M:%S')" \
+        "$(echo "$level" | tr '[:lower:]' '[:upper:]')" \
+        "launcher" \
+        "$message"
 }
 
 check_command() {
