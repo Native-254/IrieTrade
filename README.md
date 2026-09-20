@@ -23,6 +23,7 @@ A fully automated, risk‑managed trading bot for the **NYSE** (via Interactive 
 - **Long/Short capability** – enters both long and short positions with hard bracket stops (IBKR) or market orders (crypto). Short selling is automatically disabled on cash accounts and on crypto exchanges that don't support it.
 - **Multi-platform trading** – supports Interactive Brokers (IBKR) with extended forex (EUR.USD, GBP.USD, USD.JPY), metals (XAUUSD, XAGUSD), and oils (CL=F, BZ=F); Binance, OKX, Coinbase, Kraken, KuCoin; and Deriv for 24/7 synthetic indices trading (R_10, BOOM500, etc.). Includes a ready-to-use stub for the Nairobi Securities Exchange (NSE).
 - **Broker-aware crypto scanning** – automatically refreshes watchlists for each crypto broker (Binance, OKX, Coinbase, Kraken, KuCoin), ranking pairs by momentum and dollar-volume so each exchange picks high-potential coins rather than only a static list.
+- **African market scanner** – enhanced to use Mansa Markets API primary with afx.kwayisi.org fallback, reducing API calls and providing reliable data for NSE, JSE, and other African exchanges.
 - **Full risk management** – ATR‑based stops, Kelly‑dynamic position sizing, max portfolio heat, gross/net exposure limits, daily loss limits, drawdown protection, single‑name limits, and an earnings blackout filter. Risk limits can be configured **per broker** (e.g., looser limits for a small crypto account, tight limits for a large equity account).
 - **Trailing stops & partial exits** – automatically tightens stop orders and scales out of positions on exit signals.
 - **Hybrid data pipeline** – Yahoo Finance for US stocks; ccxt (direct exchange API) for crypto pairs, both with local Parquet caching.
@@ -30,7 +31,7 @@ A fully automated, risk‑managed trading bot for the **NYSE** (via Interactive 
 - **Realistic paper-trading simulation** – simulated slippage, commissions, partial fills, and short-availability checks make the paper account behave exactly like a live account.
 - **Position synchronisation** – internal positions are reconciled with IBKR’s reported positions every iteration.
 - **Custom API** – REST endpoints for signals, positions, and performance (`/api/signals`, `/api/positions`, `/api/performance`).
-- **Notifications** – real-time alerts to Discord (embeds), Telegram, and Email (Brevo API or SMTP).
+- **Notifications** – real-time alerts to Discord (embeds), Telegram, and Email (Resend API primary, Brevo API fallback).
 - **Backtesting** – a custom loop-based backtester that runs the exact same strategy classes and signal resolver as the live engine, supporting multi-strategy, position-aware simulations.
 - **Headless operation** – runs 24/7 on a VPS or local machine.
 - **Modular design** – easy to swap data providers, brokers, or strategies.
@@ -101,7 +102,7 @@ trading_bot/
 │   ├── api.py                 # FastAPI dashboard & REST API
 │   ├── discord_alerter.py
 │   ├── telegram_alerter.py
-│   └── email_alerter.py       # Brevo + SMTP
+│   └── email_alerter.py       # Resend (primary), Brevo (fallback)
 ├── live/
 │   └── engine.py              # Main orchestrator – multi‑broker loop
 ├── tools/
@@ -156,10 +157,12 @@ echo "TELEGRAM_BOT_TOKEN=..." >> .env
 echo "TELEGRAM_CHAT_ID=..." >> .env
 echo "EMAIL_SENDER=your-email@gmail.com" >> .env
 echo "EMAIL_RECIPIENT=recipient@email.com" >> .env
-# For Brevo (primary email transport)
+# Resend (primary email transport)
+echo "RESEND_API_KEY=your_resend_api_key" >> .env
+echo "RESEND_SENDER=your_resend_sender@example.com" >> .env
+# Brevo (fallback email transport)
 echo "EMAIL_BREVO_API_KEY=your_brevo_api_key" >> .env
-# For Gmail SMTP (fallback)
-echo "EMAIL_PASSWORD=your-16-char-app-password" >> .env
+echo "BREVO_SENDER=your-brevo-sender@example.com" >> .env
 # Deriv API key (get from app.deriv.com)
 echo "DERIV_API_KEY=your_deriv_api_key_here" >> .env
 # Add any crypto exchange keys as needed (see docs)
@@ -278,15 +281,19 @@ These are enabled by default in paper mode. Disable them when you switch to a li
 - Discord – Rich embeds with trade details (symbol, action, quantity, price) and error alerts. Set up via webhook URL in `.env`.
 - Telegram – Plain text alerts. Requires a bot token and chat ID (obtain via @BotFather).
 (Note: you may need to manually obtain your chat ID from `https://api.telegram.org/bot<TOKEN>/getUpdates` – a 403 error indicates an incorrect chat ID.)
-- Email – Trade alerts and critical error messages sent via Brevo API (primary) or Gmail SMTP (fallback).
+- Email – Trade alerts and critical error messages sent via Resend API (primary) or Brevo API (fallback).
 
 Add the following to your `.env`:
 
 ```bash
 EMAIL_SENDER=your-email@gmail.com
 EMAIL_RECIPIENT=recipient@email.com
-EMAIL_BREVO_API_KEY=your-brevo-api-key    # for Brevo
-EMAIL_PASSWORD=your-gmail-app-password    # for SMTP fallback
+# Resend (primary)
+RESEND_API_KEY=your_resend_api_key
+RESEND_SENDER=your_resend_sender@example.com
+# Brevo (fallback)
+EMAIL_BREVO_API_KEY=your-brevo-api-key
+BREVO_SENDER=your-brevo-sender@example.com
 ```
 
 All three channels can be enabled/disabled independently.
