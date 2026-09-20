@@ -108,6 +108,7 @@ class TradingEngine:
         self.realized_pnl: float = 0.0
         self.latest_prices: dict[str, float] = {}
         self._dust_warned = set()
+        self._crypto_fail_streak = 0
 
         # ──────────── Per‑broker strategy loading ────────────
         strategies_by_broker = self.config["strategies"].get("strategies_by_broker", {})
@@ -410,7 +411,12 @@ class TradingEngine:
     # ------------------------------------------------------------------
     def _get_crypto_data(self, broker, symbol: str, limit: int = 200) -> pd.DataFrame:
         """Fetch OHLCV from a ccxt broker for crypto pairs."""
-        if not hasattr(broker, 'exchange') or broker.exchange is None:
+        # Circuit breaker: after 3 consecutive network failures, stop trying
+        # until the next iteration resets the counter.
+        if getattr(self, "_crypto_fail_streak", 0) >= 3:
+            return pd.DataFrame()
+
+        if not hasattr(broker, "exchange") or broker.exchange is None:
             broker.connect()
         if broker.exchange is None:
             log.warning(f"Could not connect to broker for crypto data: {symbol}")
@@ -422,6 +428,8 @@ class TradingEngine:
                 ohlcv = broker.exchange.fetch_ohlcv(symbol, timeframe='15m', limit=limit)
                 if not ohlcv:
                     return pd.DataFrame()
+                # Reset failure streak on success
+                self._crypto_fail_streak = 0
                 break
             except ccxt.RateLimitExceeded as e:
                 if attempt == 2:  # Last attempt
@@ -430,6 +438,10 @@ class TradingEngine:
                 wait_time = 3 * (attempt + 1)
                 log.warning(f"Rate limit exceeded for {symbol}, retrying in {wait_time}s... (attempt {attempt + 1}/3)")
                 time.sleep(wait_time)
+            except (ccxt.NetworkError, ccxt.RequestTimeout) as e:
+                self._crypto_fail_streak = getattr(self, "_crypto_fail_streak", 0) + 1
+                log.warning(f"Failed to fetch crypto data for {symbol}: {e}")
+                return pd.DataFrame()
             except Exception as e:  # noqa: BLE001
                 log.warning(f"Failed to fetch crypto data for {symbol}: {e}")
                 return pd.DataFrame()
@@ -444,7 +456,6 @@ class TradingEngine:
         df['timestamp'] = pd.to_datetime(df['timestamp'], unit='ms', utc=True)
         df.set_index('timestamp', inplace=True)
         return df
-
     def _is_crypto(self, symbol: str) -> bool:
         """Heuristic: crypto pairs contain a '/'."""
         return '/' in symbol
@@ -1030,7 +1041,7 @@ class TradingEngine:
                 hours = int(total_seconds // 3600)
                 minutes = int((total_seconds % 3600) // 60)
                 pnl_amount = pnl_dollar
-                strategy_display = getattr(self, "_current_strategy_name", "") or "EXIT"
+                strategy_display = strategy_name if strategy_name else "EXIT"
                 # Format P&L with more precision for small values
                 if abs(pnl_amount) < 0.01:
                     pnl_amount_str = f"{pnl_amount:+.4f}"
@@ -1299,6 +1310,7 @@ class TradingEngine:
     # ------------------------------------------------------------------
     def run_iteration(self):
         log.info("--- Running iteration ---")
+        self._crypto_fail_streak = 0
         combined_nav = 0.0
         all_latest_prices = {}
 
@@ -2153,9 +2165,11 @@ class TradingEngine:
             self.telegram.send_nse_report(report)
         # Email
         if hasattr(self, 'email') and self.email:
-            self.email.send_email(
-                subject=f"IrieTrade NSE {report_type.capitalize()} Report",
-                body=report,
+            html_body = f"<pre style='font-family:monospace;'>{report}</pre>"
+            self.email.send_message(
+                subject=f"[IrieTrade] NSE {report_type.capitalize()} Report",
+                body_html=html_body,
+                category=self.email.CATEGORY_AFRICA,
             )
 
     def _capture_african_snapshots(self):
@@ -2172,21 +2186,33 @@ class TradingEngine:
 
         log.info("Generating African market morning reports...")
         briefs = {}
+        failed = []
 
         for exchange in ["NSE", "JSE", "NGX", "GSE", "BRVM"]:
             try:
                 report = self.african_scanner.generate_report(exchange)
+                # Skip placeholder reports that indicate no data was fetched
+                if "Data unavailable" in report or "temporarily unavailable" in report:
+                    failed.append(exchange)
+                    continue
                 insight = self._african_insight(exchange, report)
                 briefs[exchange] = {"report": report, "insight": insight}
                 # Still post to Telegram topic for that exchange
                 self.telegram.send_exchange_report(exchange, report)
             except Exception as e:  # noqa: BLE001
                 log.warning(f"African report failed for {exchange}: {e}")
+                failed.append(exchange)
 
         if briefs:
             self.email.send_africa_brief(briefs)
-            log.info(f"African briefs sent: {len(briefs)} exchanges in one email")
-
+            failed_str = '", "'.join(failed) if failed else "none"
+            log.info(
+                f'African briefs sent: {len(briefs)} exchanges (failed: "{failed_str}")'
+            )
+        else:
+            log.warning(
+                f'African briefs skipped — no data available for any exchange (failed: {", ".join(failed)})'
+            )
     def _run_african_close_report(self):
         if self.african_scanner is None:
             return

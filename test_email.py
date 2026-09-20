@@ -1,11 +1,14 @@
 #!/usr/bin/env python3
-"""Test script to verify email functionality"""
+"""Test script to verify email functionality"""  # noqa: EXE001
 
 import os
 import sys
+
 sys.path.insert(0, os.path.join(os.path.dirname(__file__)))
 
+from live.engine import TradingEngine  # noqa: F401
 from monitoring.email_alerter import EmailAlerter
+
 
 def test_email_alerter():
     """Test the email alerter with sample data"""
