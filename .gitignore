@@ -6,6 +6,8 @@ data/market.db
 data/test_market_15m.db
 data/raw/
 data/.encryption_key
+data/african_history
+data/nse_history
 .env
 config/settings.yaml
 .qodo
@@ -19,3 +21,4 @@ kucoin_broker.py.backup
 os
 json
 requests
+email_thread_state.json

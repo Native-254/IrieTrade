@@ -1,10 +1,5 @@
 import json
 import os
-import smtplib
-import ssl
-import uuid
-from email.mime.multipart import MIMEMultipart
-from email.mime.text import MIMEText
 from pathlib import Path
 
 import requests
@@ -24,36 +19,39 @@ class EmailAlerter:
     SUBJECT_AFRICA = "[IrieTrade] African Market Briefs"
 
     def __init__(self):
-        # Brevo (primary)
-        self.sender = os.getenv("EMAIL_SENDER")
-        self.api_key = os.getenv("EMAIL_BREVO_API_KEY")
+        # Resend (primary) — sender must be at a verified domain
+        self.resend_api_key = os.getenv("RESEND_API_KEY")
+        self.resend_sender = os.getenv("RESEND_SENDER")
+        self.resend_enabled = bool(self.resend_api_key and self.resend_sender)
+
+        # Brevo (fallback) — sender must be pre-verified in Brevo
+        self.brevo_api_key = os.getenv("EMAIL_BREVO_API_KEY")
+        self.brevo_sender = os.getenv("BREVO_SENDER")
+        self.brevo_enabled = bool(self.brevo_api_key and self.brevo_sender)
+
+        # Recipient (shared)
         self.recipient = os.getenv("EMAIL_RECIPIENT")
         self.logo_url = os.getenv("EMAIL_LOGO_URL", "https://irietrade.me/logo.png")
-        self.brevo_enabled = all([self.sender, self.api_key, self.recipient])
-
-        # SMTP (fallback)
-        self.smtp_host = os.getenv("SMTP_HOST", "smtp.gmail.com")
-        self.smtp_port = int(os.getenv("SMTP_PORT", "587"))
-        self.smtp_user = os.getenv("SMTP_USER")
-        self.smtp_password = os.getenv("SMTP_PASSWORD")
-        self.smtp_enabled = all(
-            [self.smtp_user, self.smtp_password, self.sender, self.recipient]
-        )
 
         # Persistent thread state — stores the last Message-ID per category
         self._state_path = Path("data/email_thread_state.json")
         self._state_path.parent.mkdir(parents=True, exist_ok=True)
         self._thread_state: dict = self._load_state()
 
+        providers = []
+        if self.resend_enabled:
+            providers.append("Resend")
         if self.brevo_enabled:
-            log.info("Email alerter initialized (Brevo primary, SMTP fallback).")
-        elif self.smtp_enabled:
-            log.info("Email alerter initialized (SMTP only).")
+            providers.append("Brevo")
+        if not self.recipient:
+            log.warning("Email alerter disabled — EMAIL_RECIPIENT missing.")
+        elif providers:
+            log.info(f"Email alerter initialized ({' → '.join(providers)}).")
         else:
-            log.warning("Email alerter disabled — no credentials configured.")
+            log.warning("Email alerter disabled — no API keys configured.")
 
     # ------------------------------------------------------------------
-    # State persistence — survives restarts
+    # State persistence
     # ------------------------------------------------------------------
     def _load_state(self) -> dict:
         if self._state_path.exists():
@@ -81,7 +79,7 @@ class EmailAlerter:
     # Header construction
     # ------------------------------------------------------------------
     def _build_headers(self, category: str) -> dict[str, str]:
-        """Build threading headers using the last known Message-ID for this category."""
+        """Threading headers based on the last known Message-ID for this category."""
         headers: dict[str, str] = {
             "X-Auto-Response-Suppress": "All",
             "Auto-Submitted": "auto-generated",
@@ -92,19 +90,57 @@ class EmailAlerter:
             headers["In-Reply-To"] = f"<{last_id}>"
             headers["References"] = f"<{last_id}>"
 
-        # Do NOT include List-Unsubscribe — it pushes emails to Promotions
         return headers
 
     # ------------------------------------------------------------------
-    # Transport
+    # Resend transport (primary)
+    # ------------------------------------------------------------------
+    def _send_via_resend(
+        self, subject: str, body_html: str, headers: dict[str, str]
+    ) -> str | None:
+        sender = self.resend_sender or ""
+        recipient = self.recipient or ""
+        if not (sender and recipient and self.resend_api_key):
+            return None
+
+        url = "https://api.resend.com/emails"
+        payload = {
+            "from": f"IrieTrade <{sender}>",
+            "to": [recipient],
+            "subject": subject,
+            "html": body_html,
+            "headers": headers,
+        }
+        try:
+            resp = requests.post(
+                url,
+                json=payload,
+                headers={
+                    "Authorization": f"Bearer {self.resend_api_key}",
+                    "Content-Type": "application/json",
+                },
+                timeout=15,
+            )
+            if resp.status_code in (200, 201):
+                data = resp.json()
+                message_id = str(data.get("id", ""))
+                log.info(f"Resend sent '{subject}' — ID: {message_id}")
+                return message_id
+            log.error(f"Resend failed: {resp.status_code} {resp.text[:200]}")
+            return None
+        except Exception as e:  # noqa: BLE001
+            log.error(f"Resend request failed: {e}")
+            return None
+
+    # ------------------------------------------------------------------
+    # Brevo transport (fallback)
     # ------------------------------------------------------------------
     def _send_via_brevo(
         self, subject: str, body_html: str, headers: dict[str, str]
     ) -> str | None:
-        """Send via Brevo. Returns Brevo's Message-ID on success, None on failure."""
-        sender = self.sender or ""
+        sender = self.brevo_sender or ""
         recipient = self.recipient or ""
-        if not (sender and recipient and self.api_key):
+        if not (sender and recipient and self.brevo_api_key):
             return None
 
         url = "https://api.brevo.com/v3/smtp/email"
@@ -119,7 +155,10 @@ class EmailAlerter:
             resp = requests.post(
                 url,
                 json=payload,
-                headers={"api-key": self.api_key, "Content-Type": "application/json"},
+                headers={
+                    "api-key": self.brevo_api_key,
+                    "Content-Type": "application/json",
+                },
                 timeout=15,
             )
             if resp.status_code == 201:
@@ -133,60 +172,27 @@ class EmailAlerter:
             log.error(f"Brevo request failed: {e}")
             return None
 
-    def _send_via_smtp(
-        self, subject: str, body_html: str, headers: dict[str, str]
-    ) -> str | None:
-        """Send via SMTP. Returns the SMTP Message-ID on success."""
-        smtp_user = self.smtp_user or ""
-        smtp_password = self.smtp_password or ""
-        sender = self.sender or ""
-        recipient = self.recipient or ""
-
-        if not (smtp_user and smtp_password and sender and recipient):
-            log.warning("SMTP send skipped — missing user/password/sender/recipient.")
-            return None
-
-        msg = MIMEMultipart("alternative")
-        msg["Subject"] = subject
-        msg["From"] = f"IrieTrade <{sender}>"
-        msg["To"] = recipient
-        for k, v in headers.items():
-            msg[k] = v
-
-        msg_id = f"{uuid.uuid4()}@irietrade.me"
-        msg["Message-ID"] = f"<{msg_id}>"
-
-        msg.attach(MIMEText(body_html, "html"))
-        try:
-            ctx = ssl.create_default_context()
-            with smtplib.SMTP(self.smtp_host, self.smtp_port, timeout=20) as server:
-                server.starttls(context=ctx)
-                server.login(smtp_user, smtp_password)
-                server.send_message(msg)
-            return msg_id
-        except Exception as e:  # noqa: BLE001
-            log.error(f"SMTP failed: {e}")
-            return None
-
-    def send_message(
-        self, subject: str, body_html: str, category: str
-    ) -> None:
-        """Send with Brevo, fall back to SMTP. Updates thread state on success."""
-        if not self.recipient or not self.sender:
-            log.warning("Email not sent — sender/recipient missing.")
+    # ------------------------------------------------------------------
+    # Dispatch — Resend primary, Brevo fallback
+    # ------------------------------------------------------------------
+    def send_message(self, subject: str, body_html: str, category: str) -> None:
+        if not self.recipient:
+            log.warning("Email not sent — EMAIL_RECIPIENT missing.")
             return
 
         headers = self._build_headers(category)
 
-        if self.brevo_enabled:
-            message_id = self._send_via_brevo(subject, body_html, headers)
+        # Primary: Resend
+        if self.resend_enabled:
+            message_id = self._send_via_resend(subject, body_html, headers)
             if message_id:
                 self._set_last_message_id(category, message_id)
                 return
 
-        if self.smtp_enabled:
-            log.warning("Brevo unavailable — falling back to SMTP")
-            message_id = self._send_via_smtp(subject, body_html, headers)
+        # Fallback: Brevo
+        if self.brevo_enabled:
+            log.warning("Resend unavailable — falling back to Brevo")
+            message_id = self._send_via_brevo(subject, body_html, headers)
             if message_id:
                 self._set_last_message_id(category, message_id)
                 return

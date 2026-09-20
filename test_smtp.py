@@ -68,16 +68,10 @@ def main() -> None:
     print("Connecting to SMTP server...")
     try:
         ctx = ssl.create_default_context()
-        with smtplib.SMTP(host, port, timeout=20) as server:
-            print("  Server responded. Sending EHLO...")
-            server.ehlo()
-            print("  Starting TLS...")
-            server.starttls(context=ctx)
-            server.ehlo()
+        with smtplib.SMTP_SSL(host, port, timeout=20, context=ctx) as server:
+            print("  Server responded (SSL).")
             print("  Logging in...")
             server.login(smtp_user, smtp_password)
-            print("  Login OK. Sending message...")
-            server.send_message(msg)
         print()
         print("SUCCESS — email sent. Check your inbox in ~30 seconds.")
     except smtplib.SMTPAuthenticationError as e:
