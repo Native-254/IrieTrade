@@ -1086,7 +1086,23 @@ class TradingEngine:
         that would leave dust is converted into a full close instead. This
         prevents the hourly loop of "reduce 0.01 → below minimum → skip"
         that otherwise repeats indefinitely.
+
+        Market-hours guard: IBKR rejects or queues orders after NYSE close,
+        which causes a pile-up of stale de-risk orders that get mass-cancelled
+        at the next open (Error 202). For equity brokers, skip de-risk entirely
+        when the US session is closed.
+
+        Stale-order guard: before each de-risk order, cancel any pending orders
+        for the same symbol so duplicates never accumulate.
         """
+        # --- Market hours guard (IBKR rejects/queues after-hours orders) ---
+        if not self._is_market_open(broker):
+            log.debug(
+                f"Market closed for {broker.__class__.__name__}; "
+                f"skipping de-risk this iteration."
+            )
+            return
+
         max_single = capital * rm.config.get(
             "max_position_pct",
             self.config["risk_management"]["max_position_pct"],
@@ -1145,6 +1161,20 @@ class TradingEngine:
 
             return qty
 
+        def _de_risk(sym: str, pos, reduce_qty: float, price: float) -> None:
+            """Cancel stale orders for the symbol, then place one clean de-risk."""
+            cancelled = self._cancel_pending_orders_for(broker, sym)
+            if cancelled:
+                log.info(
+                    f"De-risk {sym}: cancelled {cancelled} stale order(s) "
+                    f"before placing new de-risk."
+                )
+            side = "SELL" if pos.side == "BUY" else "BUY_TO_COVER"
+            self._place_trade(
+                broker, pm, sym, side, reduce_qty, price, 0.0, 0.0, 0.0,
+                strategy_name="De-risk",
+            )
+
         # --------------------------------------------------------------
         # Single-name concentration
         # --------------------------------------------------------------
@@ -1162,14 +1192,11 @@ class TradingEngine:
                 log.debug(f"De-risk {sym}: no valid reduction quantity; skipping.")
                 continue
 
-            side = "SELL" if pos.side == "BUY" else "BUY_TO_COVER"
             log.warning(
                 f"De-risking {sym}: reducing {reduce_qty:.8f} to enforce "
                 f"single-name limit."
             )
-            self._place_trade(
-                broker, pm, sym, side, reduce_qty, price, 0.0, 0.0, 0.0
-            )
+            _de_risk(sym, pos, reduce_qty, price)
 
         # --------------------------------------------------------------
         # Gross exposure
@@ -1196,14 +1223,11 @@ class TradingEngine:
                 if reduce_qty <= 0:
                     continue
 
-                side = "SELL" if pos.side == "BUY" else "BUY_TO_COVER"
                 log.warning(
                     f"De-risking gross: reducing {sym} by {reduce_qty:.8f} "
                     f"to lower total exposure."
                 )
-                self._place_trade(
-                    broker, pm, sym, side, reduce_qty, price, 0.0, 0.0, 0.0
-                )
+                _de_risk(sym, pos, reduce_qty, price)
                 overage -= reduce_qty * price
 
         # --------------------------------------------------------------
@@ -1234,15 +1258,59 @@ class TradingEngine:
                 if reduce_qty <= 0:
                     continue
 
-                side = "SELL" if pos.side == "BUY" else "BUY_TO_COVER"
                 log.warning(
                     f"De-risking net: reducing {sym} by {reduce_qty:.8f} "
                     f"to lower net exposure."
                 )
-                self._place_trade(
-                    broker, pm, sym, side, reduce_qty, price, 0.0, 0.0, 0.0
-                )
+                _de_risk(sym, pos, reduce_qty, price)
                 overage_net -= reduce_qty * price
+
+    def _is_market_open(self, broker) -> bool:
+        """Return True if the primary market for this broker is currently open.
+
+        Crypto and synthetics trade 24/7. US equities (IBKR) are only open
+        Mon–Fri 09:30–16:00 ET. Attempting to place stock orders outside
+        these hours causes IBKR to queue them, which piles up and gets
+        mass-cancelled at the next open with Error 202.
+        """
+        if broker.__class__.__name__ != "IBBroker":
+            return True  # crypto, synthetics, and other brokers trade 24/7
+
+        now_utc = datetime.now(timezone.utc)
+
+        # Determine whether US markets are in DST by checking the 2nd Sunday
+        # in March at 07:00 UTC and the 1st Sunday in November at 06:00 UTC.
+        year = now_utc.year
+        march = datetime(year, 3, 1, 7, 0, tzinfo=timezone.utc)
+        dst_start = march + timedelta(days=(6 - march.weekday() + 7) % 7 + 7)
+        november = datetime(year, 11, 1, 6, 0, tzinfo=timezone.utc)
+        dst_end = november + timedelta(days=(6 - november.weekday()) % 7)
+
+        is_dst = dst_start <= now_utc < dst_end
+        et_offset_hours = -4 if is_dst else -5
+        now_et = now_utc + timedelta(hours=et_offset_hours)
+
+        if now_et.weekday() >= 5:  # Saturday=5, Sunday=6
+            return False
+
+        open_et = now_et.replace(hour=9, minute=30, second=0, microsecond=0)
+        close_et = now_et.replace(hour=16, minute=0, second=0, microsecond=0)
+        return open_et <= now_et <= close_et
+
+    def _cancel_pending_orders_for(self, broker, symbol: str) -> int:
+        """Cancel all open orders for a symbol. Returns number cancelled.
+
+        Safe no-op for brokers that don't expose cancel_all_for_symbol.
+        """
+        cancel_fn = getattr(broker, "cancel_all_for_symbol", None)
+        if not callable(cancel_fn):
+            return 0
+        try:
+            return int(cancel_fn(symbol) or 0) # type: ignore # type: ignore
+        except Exception as e:  # noqa: BLE001
+            log.debug(f"Could not cancel pending orders for {symbol}: {e}")
+            return 0
+
     def _rotate_underperformers(
         self, broker, pm, latest_prices: dict, active_symbols: list[str]
     ):

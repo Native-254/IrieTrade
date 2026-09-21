@@ -2,7 +2,17 @@
 import time
 from decimal import ROUND_HALF_UP, Decimal
 
-from ib_async import IB, LimitOrder, MarketOrder, Stock, StopOrder, Future, Forex
+from ib_async import (
+    CFD,  # noqa: F401
+    IB,
+    Contract,
+    Forex,
+    Future,
+    LimitOrder,
+    MarketOrder,
+    Stock,
+    StopOrder,
+)
 
 from execution.broker import Broker
 from utils.config import CONFIG
@@ -15,6 +25,7 @@ class IBBroker(Broker):
         self.config = CONFIG["exchanges"]["ib"]
         self.connected = False
         self.is_margin = True  # assume margin until proven otherwise
+        self._contract_cache: dict[str, Contract] = {}
 
     def connect(self):
         if self.connected:
@@ -66,37 +77,91 @@ class IBBroker(Broker):
     def _normalize_price(self, contract, price: float) -> float:
         return self._round_to_tick(float(price), self._get_min_tick(contract))
 
-    def _create_contract(self, symbol: str):
+    def _make_contract(self, symbol: str) -> Contract:
         """Create appropriate contract based on symbol format.
 
         Rules:
-        - If symbol has =F suffix → Future
-        - If symbol has . between two currencies → Forex (e.g., EUR.USD)
-        - If symbol starts with XAU/XAG or contains CFD → CFD
+        - Forex: "EUR.USD", "GBP.JPY" (dot-separated, 3-letter currencies) -> "EURUSD"
+        - Metals as CFD: XAUUSD, XAGUSD, etc.
+        - Oil / index futures: symbol like "CL" or "CL=F" (needs front-month resolution)
+        - Indices (ES/NQ): same as oil
         - Otherwise → Stock
         """
-        # Future contracts (ending with =F)
-        if symbol.endswith("=F"):
-            # Remove the =F suffix for the symbol
-            future_symbol = symbol[:-2]
-            return Future(future_symbol, "SMART", "USD")
+        s = symbol.upper().strip()
 
-        # Forex pairs (containing a single dot between currencies)
-        elif "." in symbol and len(symbol.split(".")) == 2:
-            base, quote = symbol.split(".")
-            # Common forex pairs - if both are 3-letter currencies, treat as forex
+        # Forex: "EUR.USD", "GBP.JPY" (dot-separated, 3-letter currencies)
+        if "." in s and len(s.split(".")) == 2:
+            base, quote = s.split(".")
             if len(base) == 3 and len(quote) == 3 and base.isalpha() and quote.isalpha():
-                return Forex(symbol)  # ib_async Forex expects the pair format like "EUR.USD"
+                # ib_async Forex expects pair format like "EURUSD" (no dot)
+                return Forex(base + quote)  # e.g., "EURUSD"
 
-        # CFD contracts (starting with XAU/XAG or containing CFD)
-        elif symbol.startswith(("XAU", "XAG")) or "CFD" in symbol.upper():
+        # Metals as CFD (no expiry headache)
+        if s in {"XAUUSD", "XAGUSD", "XPTUSD", "XPDUSD"}:
             # For CFDs, we'll use Stock contract but with appropriate exchange
             # XAUUSD, XAGUSD are typically traded as CFDs on IBKR
-            return Stock(symbol, "SMART", "USD")
+            return Stock(s, "SMART", "USD")
 
-        # Default to Stock
-        else:
-            return Stock(symbol, "SMART", "USD")
+        # Oil / index futures — symbol like "CL" or "CL=F"
+        s = s.removesuffix("=F")  # Remove =F suffix for processing
+
+        # Futures that we want to trade
+        futures_symbols = {"CL", "BZ", "NG", "GC", "SI", "ES", "NQ", "YM", "RTY"}
+        if s in futures_symbols:
+            return self._front_month_future(s)
+
+        # Default: stock
+        return Stock(symbol, "SMART", "USD")
+
+    def _front_month_future(self, root: str) -> Contract:
+        """Return the nearest non-expired futures contract for a root symbol."""
+        # CME/ICE month codes: F=Jan, G=Feb, H=Mar, J=Apr, K=May, M=Jun,
+        #                     N=Jul, Q=Aug, U=Sep, V=Oct, X=Nov, Z=Dec
+        month_codes = "FGHJKMNQUVXZ"
+
+        # Get current month code
+        from datetime import datetime, timezone
+        now = datetime.now(timezone.utc)
+        month = now.month
+        year = now.year % 100  # YY format
+
+        # Try current month first, then future months
+        for i in range(12):  # Check current and next 11 months
+            month_idx = (month - 1 + i) % 12
+            year_offset = (month - 1 + i) // 12
+            contract_year = year + year_offset
+            month_code = month_codes[month_idx]
+
+            # Construct future symbol (e.g., "CLZ6" for December 2026)
+            future_symbol = f"{root}{month_code}{contract_year:02d}"
+
+            try:
+                # Try to create and qualify this contract
+                contract = Future(future_symbol, self._get_exchange(root), "USD")
+                # We don't qualify here to avoid excessive API calls - qualification happens in _get_contract
+                return contract
+            except Exception as e:  # noqa: BLE001
+                log.debug(f"Front month future attempt failed for {future_symbol}: {e}")
+                # If this month fails, try next month
+                continue
+
+        # Fallback: return the first in the list if all else fails
+        return Future(f"{root}{month_codes[0]}{year:02d}", self._get_exchange(root), "USD")
+
+    def _get_exchange(self, root: str) -> str:
+        """Get the appropriate exchange for a futures root symbol."""
+        exchange_map = {
+            "CL": "NYMEX",   # Crude Oil
+            "BZ": "NYMEX",   # Brent Crude
+            "NG": "NYMEX",   # Natural Gas
+            "GC": "COMEX",   # Gold
+            "SI": "COMEX",   # Silver
+            "ES": "CME",     # E-mini S&P 500
+            "NQ": "CME",     # E-mini NASDAQ 100
+            "YM": "CBOT",    # E-mini Dow Jones
+            "RTY": "CME",    # E-mini Russell 2000
+        }
+        return exchange_map.get(root.upper(), "SMART")
 
     @property
     def supports_shorting(self) -> bool:
@@ -118,6 +183,15 @@ class IBBroker(Broker):
             "unrealized_pnl": unrealized_pnl,
         }
 
+    def _get_contract(self, symbol: str) -> Contract:
+        """Get contract for symbol with caching."""
+        if symbol not in self._contract_cache:
+            contract = self._make_contract(symbol)
+            self.ib.qualifyContracts(contract)
+            self._contract_cache[symbol] = contract
+            log.debug(f"Contract resolved: {symbol} → {contract}")
+        return self._contract_cache[symbol]
+
     def place_order(
         self,
         symbol: str,
@@ -138,8 +212,9 @@ class IBBroker(Broker):
         elif ib_side == "SELL_SHORT":
             ib_side = "SELL"
 
-        contract = self._create_contract(symbol)
-        self.ib.qualifyContracts(contract)
+        contract = self._get_contract(symbol)
+        if not self._safe_qualify(contract):
+            raise RuntimeError(f"Could not qualify contract for {symbol}")
         if order_type.upper() == "MKT":
             order = MarketOrder(ib_side, quantity)
             order.tif = "IOC"
@@ -172,7 +247,7 @@ class IBBroker(Broker):
     ) -> tuple[int | None, int | None]:
         if not self.connected:
             self.connect()
-        contract = self._create_contract(symbol)
+        contract = self._get_contract(symbol)
         self.ib.qualifyContracts(contract)
         stop_price = self._normalize_price(contract, stop_price)
         take_profit = self._normalize_price(contract, take_profit)
@@ -206,7 +281,7 @@ class IBBroker(Broker):
     ) -> tuple[int | None, int | None]:
         if not self.connected:
             self.connect()
-        contract = self._create_contract(symbol)
+        contract = self._get_contract(symbol)
         self.ib.qualifyContracts(contract)
         stop_price = self._normalize_price(contract, stop_price)
         take_profit = self._normalize_price(contract, take_profit)
@@ -292,7 +367,7 @@ class IBBroker(Broker):
             log.info(f"Short sale of {symbol} blocked – cash account.")
             return False
         try:
-            contract = self._create_contract(symbol)
+            contract = self._get_contract(symbol)
             self.ib.qualifyContracts(contract)
             shortable_func = getattr(self.ib, "shortableShares", None)
             if shortable_func is None:
@@ -328,8 +403,45 @@ class IBBroker(Broker):
             time.sleep(0.5)
         return {"filled": 0, "status": "Timeout"}
 
+    def cancel_all_for_symbol(self, symbol: str) -> int:
+        """Cancel every open order for the given symbol. Returns count cancelled."""
+        if not self.connected:
+            self.connect()
+        count = 0
+        for trade in self.ib.trades():
+            try:
+                if trade.contract.symbol != symbol:
+                    continue
+                if trade.orderStatus.status in (
+                    "PreSubmitted",
+                    "Submitted",
+                    "PendingSubmit",
+                ):
+                    self.ib.cancelOrder(trade.order)
+                    count += 1
+            except Exception as e:  # noqa: BLE001
+                log.debug(f"Failed cancelling an order for {symbol}: {e}")
+        if count:
+            log.info(f"Cancelled {count} pending order(s) for {symbol}.")
+        return count
+
+    def _safe_qualify(self, contract) -> bool:
+        """Qualify a contract, reconnecting if the socket dropped."""
+        for attempt in range(2):
+            try:
+                self.ib.qualifyContracts(contract)
+                return True
+            except Exception as e:  # noqa: BLE001
+                log.warning(f"qualifyContracts failed (attempt {attempt+1}): {e}")
+                self.connected = False
+                if attempt == 0:
+                    time.sleep(2)
+                    self.connect()
+        return False
+
     def disconnect(self):
         if self.connected:
             self.ib.disconnect()
             self.connected = False
+            self._contract_cache.clear()
             log.info("Disconnected from IBKR.")
