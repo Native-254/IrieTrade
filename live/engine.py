@@ -229,11 +229,11 @@ class TradingEngine:
         global _engine_instance
         _engine_instance = self
 
-    def _alert_if_critical(self, message: str, source: str = "") -> None:
+    def _alert_if_critical(self, message: str, source: str = "", severity: str = "critical") -> None:
         """Send a critical alert via all available channels."""
         formatted = f"[{source}] {message}" if source else message
         try:
-            self.email.send_error_alert(message, source)
+            self.email.send_error_alert(message, source, severity=severity)
         except Exception as e:  # noqa: BLE001
             log.debug(f"Failed to send email error alert: {e}")
         try:
@@ -682,7 +682,8 @@ class TradingEngine:
         if self._earnings_nearby(symbol):
             self._alert_if_critical(
                 f"Trade skipped for {symbol}: earnings nearby.",
-                source=self._get_broker_source(broker)
+                source=self._get_broker_source(broker),
+                severity="critical"
             )
             log.warning(f"Earnings nearby for {symbol}, trade blocked.")
             return False
@@ -692,7 +693,8 @@ class TradingEngine:
         ):
             self._alert_if_critical(
                 f"Short sale rejected for {symbol}: not enough shares",
-                source=self._get_broker_source(broker)
+                source=self._get_broker_source(broker),
+                severity="critical"
             )
             return False
 
@@ -758,7 +760,8 @@ class TradingEngine:
                         log.error(f"Failed to place bracket order for {symbol}")
                         self._alert_if_critical(
                             f"Trade failed for {symbol}: bracket order rejected",
-                            source=self._get_broker_source(broker)
+                            source=self._get_broker_source(broker),
+                            severity="critical"
                         )
                         return False
 
@@ -825,7 +828,8 @@ class TradingEngine:
                     log.exception(f"Entry execution error for {symbol}: {e}")
                     self._alert_if_critical(
                         f"Trade failed for {symbol}: {e}",
-                        source=self._get_broker_source(broker)
+                        source=self._get_broker_source(broker),
+                        severity="critical"
                     )
                     return False
 
@@ -843,7 +847,8 @@ class TradingEngine:
                         log.error(f"Plain order failed for {symbol}: no order ID")
                         self._alert_if_critical(
                             f"Trade failed for {symbol}: plain order rejected",
-                            source=self._get_broker_source(broker)
+                            source=self._get_broker_source(broker),
+                            severity="critical"
                         )
                         return False
 
@@ -894,7 +899,8 @@ class TradingEngine:
                     log.exception(f"Entry error for {symbol}: {e}")
                     self._alert_if_critical(
                         f"Trade failed for {symbol}: {e}",
-                        source=self._get_broker_source(broker)
+                        source=self._get_broker_source(broker),
+                        severity="critical"
                     )
                     return False
 
@@ -906,7 +912,8 @@ class TradingEngine:
                 log.warning(f"No internal position for {symbol}")
                 self._alert_if_critical(
                     f"Trade failed for {symbol}: no position to close",
-                    source=self._get_broker_source(broker)
+                    source=self._get_broker_source(broker),
+                    severity="critical"
                 )
                 return False
 
@@ -996,7 +1003,8 @@ class TradingEngine:
                     log.error(f"Failed to place closing order for {symbol}")
                     self._alert_if_critical(
                         f"Trade failed for {symbol}: closing order rejected",
-                        source=self._get_broker_source(broker)
+                        source=self._get_broker_source(broker),
+                        severity="critical"
                     )
                     return False
 
@@ -1007,7 +1015,8 @@ class TradingEngine:
                     )
                     self._alert_if_critical(
                         f"Trade failed for {symbol}: closing order not filled",
-                        source=self._get_broker_source(broker)
+                        source=self._get_broker_source(broker),
+                        severity="critical"
                     )
                     return False
 
@@ -1111,7 +1120,8 @@ class TradingEngine:
                 log.exception(f"Exit execution error for {symbol}: {e}")
                 self._alert_if_critical(
                     f"Trade failed for {symbol}: {e}",
-                    source=self._get_broker_source(broker)
+                    source=self._get_broker_source(broker),
+                    severity="critical"
                 )
                 return False
 
@@ -1168,7 +1178,7 @@ class TradingEngine:
             except Exception:  # noqa: BLE001
                 return 0.0
 
-        def _adjust_reduce_qty(sym: str, pos, _price: float, requested: float) -> float:
+        def _adjust_reduce_qty(sym: str, pos, requested: float) -> float:
             """Return the quantity to reduce, upgrading to a full close when
             a partial reduction would leave the position below min base size."""
             qty = requested
@@ -1228,7 +1238,7 @@ class TradingEngine:
                 continue
 
             excess = notional - max_single
-            reduce_qty = _adjust_reduce_qty(sym, pos, price, excess / price)
+            reduce_qty = _adjust_reduce_qty(sym, pos, excess / price)
             if reduce_qty <= 0:
                 log.debug(f"De-risk {sym}: no valid reduction quantity; skipping.")
                 continue
@@ -1260,7 +1270,7 @@ class TradingEngine:
                 notional = pos.quantity * price
                 reduce_notional = min(notional, overage)
                 raw_qty = reduce_notional / price
-                reduce_qty = _adjust_reduce_qty(sym, pos, price, raw_qty)
+                reduce_qty = _adjust_reduce_qty(sym, pos, raw_qty)
                 if reduce_qty <= 0:
                     continue
 
@@ -1295,7 +1305,7 @@ class TradingEngine:
                 notional = pos.quantity * price
                 reduce_notional = min(notional, overage_net)
                 raw_qty = reduce_notional / price
-                reduce_qty = _adjust_reduce_qty(sym, pos, price, raw_qty)
+                reduce_qty = _adjust_reduce_qty(sym, pos, raw_qty)
                 if reduce_qty <= 0:
                     continue
 
@@ -1462,6 +1472,11 @@ class TradingEngine:
                     f"Broker '{broker_name}' reported invalid capital "
                     f"({capital}); skipping portfolio update this iteration."
                 )
+                self._alert_if_critical(
+                    f"Invalid capital guard trip: {broker_name} reported capital {capital}",
+                    source="capital_guard",
+                    severity="critical"
+                )
                 continue
 
             rm.update_portfolio(capital - rm.current_capital, 0)
@@ -1534,6 +1549,11 @@ class TradingEngine:
                             log.success(f"Stop-loss closure executed for {sym}.")
                         else:
                             log.error(f"Failed to close {sym} on stop-loss.")
+                            self._alert_if_critical(
+                                f"Stop-loss closure failed for {sym}",
+                                source="stop_loss",
+                                severity="critical"
+                            )
                     else:
                         log.warning(
                             f"Broker stop order {pos.stop_order_id} exists for {sym}; skipping manual close."
@@ -1914,6 +1934,11 @@ class TradingEngine:
             )
         except Exception as e:  # noqa: BLE001
             log.error(f"Position sync failed: {e}")
+            self._alert_if_critical(
+                f"Position sync failed: {e}",
+                source="position_sync",
+                severity="critical"
+            )
 
     def _reconcile_and_log_closed_positions(self, pm, last_logged_qty, latest_prices):
         for sym, last_qty in list(last_logged_qty.items()):

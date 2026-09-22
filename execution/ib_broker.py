@@ -183,11 +183,27 @@ class IBBroker(Broker):
             "unrealized_pnl": unrealized_pnl,
         }
 
+    def get_historical_data(self, symbol: str, duration: str = "30 D", bar_size: str = "1 hour"):
+        """Get historical data from IBKR for a symbol."""
+        from ib_async import util
+
+        contract = self._get_contract(symbol)
+        bars = self.ib.reqHistoricalData(
+            contract,
+            endDateTime="",
+            durationStr=duration,
+            barSizeSetting=bar_size,
+            whatToShow="MIDPOINT" if isinstance(contract, Forex) else "TRADES",
+            useRTH=True,
+        )
+        return util.df(bars)
+
     def _get_contract(self, symbol: str) -> Contract:
         """Get contract for symbol with caching."""
         if symbol not in self._contract_cache:
             contract = self._make_contract(symbol)
-            self.ib.qualifyContracts(contract)
+            if not self._safe_qualify(contract):
+                raise RuntimeError(f"Could not qualify contract for {symbol}")
             self._contract_cache[symbol] = contract
             log.debug(f"Contract resolved: {symbol} → {contract}")
         return self._contract_cache[symbol]
@@ -248,7 +264,8 @@ class IBBroker(Broker):
         if not self.connected:
             self.connect()
         contract = self._get_contract(symbol)
-        self.ib.qualifyContracts(contract)
+        if not self._safe_qualify(contract):
+            raise RuntimeError(f"Could not qualify contract for {symbol}")
         stop_price = self._normalize_price(contract, stop_price)
         take_profit = self._normalize_price(contract, take_profit)
         parent = MarketOrder("SELL", quantity)
@@ -282,7 +299,8 @@ class IBBroker(Broker):
         if not self.connected:
             self.connect()
         contract = self._get_contract(symbol)
-        self.ib.qualifyContracts(contract)
+        if not self._safe_qualify(contract):
+            raise RuntimeError(f"Could not qualify contract for {symbol}")
         stop_price = self._normalize_price(contract, stop_price)
         take_profit = self._normalize_price(contract, take_profit)
         parent = MarketOrder("BUY", quantity)

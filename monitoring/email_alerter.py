@@ -1,5 +1,8 @@
 import json
 import os
+import re
+import hashlib
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 import requests
@@ -17,6 +20,18 @@ class EmailAlerter:
     SUBJECT_TRADES = "[IrieTrade] Trade Alerts"
     SUBJECT_ERRORS = "[IrieTrade] Errors"
     SUBJECT_AFRICA = "[IrieTrade] African Market Briefs"
+
+    # ------------------------------------------------------------------
+    # Error budgeting and deduplication
+    # ------------------------------------------------------------------
+    # Errors at or above this severity are eligible for email
+    _EMAIL_SEVERITIES = {"critical", "important"}
+
+    # Default dedup window per normalized message (hours)
+    _DEFAULT_DEDUP_HOURS = 6
+
+    # Daily email budget (leave headroom under Resend's 100/day free tier)
+    _DAILY_EMAIL_BUDGET = int(os.getenv("EMAIL_DAILY_BUDGET", "80"))
 
     def __init__(self):
         # Resend (primary) — sender must be at a verified domain
@@ -37,6 +52,11 @@ class EmailAlerter:
         self._state_path = Path("data/email_thread_state.json")
         self._state_path.parent.mkdir(parents=True, exist_ok=True)
         self._thread_state: dict = self._load_state()
+
+        # Error state for dedup and budgeting
+        self._error_state_path = Path("data/email_error_state.json")
+        self._error_state_path.parent.mkdir(parents=True, exist_ok=True)
+        self._error_state: dict = self._load_error_state()
 
         providers = []
         if self.resend_enabled:
@@ -74,6 +94,88 @@ class EmailAlerter:
     def _set_last_message_id(self, category: str, message_id: str) -> None:
         self._thread_state[category] = message_id
         self._save_state()
+
+    # ------------------------------------------------------------------
+    # Error dedup and budgeting
+    # ------------------------------------------------------------------
+    def _load_error_state(self) -> dict:
+        if self._error_state_path.exists():
+            try:
+                return json.loads(self._error_state_path.read_text())
+            except Exception as e:  # noqa: BLE001
+                log.debug(f"Could not load error state: {e}")
+        return {"hashes": {}, "daily_count": 0, "daily_date": ""}
+
+    def _save_error_state(self) -> None:
+        try:
+            self._error_state_path.write_text(
+                json.dumps(self._error_state, indent=2)
+            )
+        except Exception as e:  # noqa: BLE001
+            log.debug(f"Could not persist error state: {e}")
+
+    @staticmethod
+    def _normalize_error_key(msg: str) -> str:
+        """Strip volatile bits (numbers, IDs, timestamps) so the same
+        underlying error collapses to one key across occurrences."""
+        s = msg.lower()
+        # Remove timestamps like 2026-09-21 10:01:22
+        s = re.sub(r"\d{4}-\d{2}-\d{2}[ t]\d{2}:\d{2}:\d{2}", "<ts>", s)
+        # Remove hex ids, order ids, request ids
+        s = re.sub(r"\b[0-9a-f]{8,}\b", "<id>", s)
+        s = re.sub(r"\b(reqid|orderid|reqid=)\s*\d+", r"\1 <n>", s)
+        # Remove any run of digits (prices, quantities, counts)
+        s = re.sub(r"\d+\.?\d*", "<n>", s)
+        # Collapse whitespace
+        s = re.sub(r"\s+", " ", s).strip()
+        # Truncate so identical prefixes dedup even if suffix differs
+        return hashlib.sha256(s[:200].encode("utf-8")).hexdigest()[:16]
+
+    def _error_budget_ok(self) -> bool:
+        """Return True if we're still under today's email budget."""
+        today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+        state = self._error_state
+        if state.get("daily_date") != today:
+            state["daily_date"] = today
+            state["daily_count"] = 0
+            self._save_error_state()
+        return int(state.get("daily_count", 0)) < self._DAILY_EMAIL_BUDGET
+
+    def _error_dedup_ok(
+        self, msg: str, dedup_hours: int = _DEFAULT_DEDUP_HOURS
+    ) -> bool:
+        """Return True if this error hasn't been emailed recently."""
+        key = self._normalize_error_key(msg)
+        now = datetime.now(timezone.utc)
+        hashes: dict = self._error_state.setdefault("hashes", {})
+        last_iso = hashes.get(key)
+        if last_iso:
+            try:
+                last = datetime.fromisoformat(last_iso)
+                if now - last < timedelta(hours=dedup_hours):
+                    log.debug(
+                        f"Suppressing duplicate error email (key={key}, "
+                        f"last sent {last_iso})"
+                    )
+                    return False
+            except Exception:  # noqa: BLE001
+                pass
+        hashes[key] = now.isoformat()
+        # Keep the hash table small — prune anything older than 7 days
+        cutoff = now - timedelta(days=7)
+        for k in list(hashes.keys()):
+            try:
+                if datetime.fromisoformat(hashes[k]) < cutoff:
+                    del hashes[k]
+            except Exception:  # noqa: BLE001
+                del hashes[k]
+        self._save_error_state()
+        return True
+
+    def _record_email_sent(self) -> None:
+        state = self._error_state
+        state["daily_count"] = int(state.get("daily_count", 0)) + 1
+        self._save_error_state()
 
     # ------------------------------------------------------------------
     # Header construction
@@ -259,14 +361,50 @@ class EmailAlerter:
         body = self._shell("Trade Executed", action_color, inner)
         self.send_message(self.SUBJECT_TRADES, body, self.CATEGORY_TRADES)
 
-    def send_error_alert(self, error_msg: str, source: str = "general") -> None:
+    def send_error_alert(
+        self,
+        error_msg: str,
+        source: str = "general",
+        severity: str = "important",
+        dedup_hours: int = _DEFAULT_DEDUP_HOURS,
+    ) -> None:
+        """Send an error email, subject to severity + dedup + budget rules.
+
+        severity:
+          - "critical" → always emails (still subject to daily budget)
+          - "important" (default) → emails once per dedup window
+          - "info" / "warning" → never emails, only logs
+        """
+        # Layer 1: severity filter
+        if severity not in self._EMAIL_SEVERITIES:
+            log.debug(
+                f"[email-suppressed:{severity}] {source}: {error_msg}"
+            )
+            return
+
+        # Layer 2: deduplication
+        effective_dedup = 0 if severity == "critical" else dedup_hours
+        if effective_dedup > 0 and not self._error_dedup_ok(
+            error_msg, effective_dedup
+        ):
+            return
+
+        # Layer 3: daily budget
+        if not self._error_budget_ok():
+            log.warning(
+                f"Email budget exhausted for today "
+                f"({self._DAILY_EMAIL_BUDGET} max). Error logged but not emailed."
+            )
+            return
+
         inner = (
             f'<p style="background:#1e1e2f;padding:14px;border-left:4px solid #e17055;'
             f'font-family:monospace;font-size:13px;line-height:1.5;color:#dfe6e9;">'
             f'{error_msg}</p>'
         )
-        body = self._shell(f"Error — {source.upper()}", "#e17055", inner)
+        body = self._shell(f"{severity.capitalize()} — {source.upper()}", "#e17055", inner)
         self.send_message(self.SUBJECT_ERRORS, body, self.CATEGORY_ERRORS)
+        self._record_email_sent()
 
     def send_africa_brief(self, briefs: dict) -> None:
         """briefs: {"NSE": {"report": str, "insight": str}, ...}"""
