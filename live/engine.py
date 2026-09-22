@@ -2,6 +2,7 @@ import csv
 import os
 import threading
 import time
+from collections import defaultdict
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
@@ -103,6 +104,7 @@ class TradingEngine:
             log.error("No brokers available. Bot will idle until a broker connects.")
 
         self.trade_results: list[tuple[str, float]] = []
+        self.strategy_performance: dict[str, list[float]] = defaultdict(list)
         self.equity_history: list[tuple[datetime, float]] = []
         self.unrealized_pnl: float = 0.0
         self.realized_pnl: float = 0.0
@@ -226,6 +228,22 @@ class TradingEngine:
         log.success("Trading Engine initialized.")
         global _engine_instance
         _engine_instance = self
+
+    def _alert_if_critical(self, message: str, source: str = "") -> None:
+        """Send a critical alert via all available channels."""
+        formatted = f"[{source}] {message}" if source else message
+        try:
+            self.email.send_error_alert(message, source)
+        except Exception as e:  # noqa: BLE001
+            log.debug(f"Failed to send email error alert: {e}")
+        try:
+            self.telegram.send_error_alert(formatted)
+        except Exception as e:  # noqa: BLE001
+            log.debug(f"Failed to send telegram error alert: {e}")
+        try:
+            self.discord.send_error_alert(formatted)
+        except Exception as e:  # noqa: BLE001
+            log.debug(f"Failed to send discord error alert: {e}")
 
     def _capture_market_data(self):
         """Capture market data from all brokers and store in blotter."""
@@ -491,8 +509,10 @@ class TradingEngine:
         exit_price,
         pnl,
         side,
-        strategy_name="",
+        strategy_name: str | None = None,
     ):
+        if strategy_name is None:
+            strategy_name = ""
         filepath = "logs/trades.csv"
         headers = [
             "timestamp",
@@ -523,6 +543,13 @@ class TradingEngine:
                     "strategy": strategy_name,
                 }
             )
+
+        # Record performance for the strategy if a strategy name is provided
+        if strategy_name and strategy_name.strip():
+            trade_value = entry_price * quantity
+            if trade_value != 0:
+                pnl_frac = pnl / trade_value
+                self.strategy_performance[strategy_name].append(pnl_frac)
 
     def _simulate_partial_fill(self, requested_qty: float) -> float:
         if not self.config["execution"].get("simulate_partial_fills", False):
@@ -627,6 +654,15 @@ class TradingEngine:
         kelly = win_rate - ((1 - win_rate) / (avg_win / avg_loss))
         return float(max(0.0, min(kelly * 0.5, 0.05)))
 
+    def strategy_expectancy(self, strategy_name: str) -> float:
+        """Calculate the average PnL (as fraction) for a given strategy."""
+        if not strategy_name or strategy_name not in self.strategy_performance:
+            return 0.0
+        returns = self.strategy_performance[strategy_name]
+        if not returns:
+            return 0.0
+        return float(np.mean(returns))
+
     # ------------------------------------------------------------------
     # Per‑broker trade execution
     # ------------------------------------------------------------------
@@ -644,7 +680,7 @@ class TradingEngine:
         strategy_name: str | None = None,
     ) -> bool:
         if self._earnings_nearby(symbol):
-            self.email.send_error_alert(
+            self._alert_if_critical(
                 f"Trade skipped for {symbol}: earnings nearby.",
                 source=self._get_broker_source(broker)
             )
@@ -654,7 +690,7 @@ class TradingEngine:
         if action == "SELL_SHORT" and not self._check_shortable(
             broker, symbol, quantity
         ):
-            self.email.send_error_alert(
+            self._alert_if_critical(
                 f"Short sale rejected for {symbol}: not enough shares",
                 source=self._get_broker_source(broker)
             )
@@ -720,7 +756,7 @@ class TradingEngine:
                         )
                     if not order_id:
                         log.error(f"Failed to place bracket order for {symbol}")
-                        self.email.send_error_alert(
+                        self._alert_if_critical(
                             f"Trade failed for {symbol}: bracket order rejected",
                             source=self._get_broker_source(broker)
                         )
@@ -729,7 +765,7 @@ class TradingEngine:
                     fill = broker.wait_for_fill(order_id)
                     if fill["status"] != "Filled" or fill["filled"] == 0:
                         log.error(f"Order not filled for {symbol}: {fill['status']}")
-                        self.email.send_error_alert(
+                        self._alert_if_critical(
                             f"Trade failed for {symbol}: order not filled",
                             source=self._get_broker_source(broker)
                         )
@@ -755,6 +791,7 @@ class TradingEngine:
                             stop_loss=slipped_stop_loss,
                             stop_order_id=safe_stop_id,
                             entry_time=datetime.now(timezone.utc),
+                            strategy=strategy_name,
                         )
                     )
                     self.email.send_trade_alert(symbol, action, filled_qty, avg_price, source=broker_label)
@@ -786,7 +823,7 @@ class TradingEngine:
                     use_bracket = False
                 except Exception as e:  # noqa: BLE001
                     log.exception(f"Entry execution error for {symbol}: {e}")
-                    self.email.send_error_alert(
+                    self._alert_if_critical(
                         f"Trade failed for {symbol}: {e}",
                         source=self._get_broker_source(broker)
                     )
@@ -804,7 +841,7 @@ class TradingEngine:
                     )
                     if not order_result or not order_result.get("order_id"):
                         log.error(f"Plain order failed for {symbol}: no order ID")
-                        self.email.send_error_alert(
+                        self._alert_if_critical(
                             f"Trade failed for {symbol}: plain order rejected",
                             source=self._get_broker_source(broker)
                         )
@@ -834,6 +871,7 @@ class TradingEngine:
                             stop_loss=stop_loss,
                             stop_order_id=0,
                             entry_time=datetime.now(timezone.utc),
+                            strategy=strategy_name,
                         )
                     )
                     self.email.send_trade_alert(symbol, action, filled_qty, avg_price, source=broker_label)
@@ -854,7 +892,7 @@ class TradingEngine:
 
                 except Exception as e:  # noqa: BLE001
                     log.exception(f"Entry error for {symbol}: {e}")
-                    self.email.send_error_alert(
+                    self._alert_if_critical(
                         f"Trade failed for {symbol}: {e}",
                         source=self._get_broker_source(broker)
                     )
@@ -866,7 +904,7 @@ class TradingEngine:
             pos = pm.positions.get(symbol)
             if not pos:
                 log.warning(f"No internal position for {symbol}")
-                self.email.send_error_alert(
+                self._alert_if_critical(
                     f"Trade failed for {symbol}: no position to close",
                     source=self._get_broker_source(broker)
                 )
@@ -916,6 +954,7 @@ class TradingEngine:
                         last_price,
                         pnl_dollar,
                         pos.side,
+                        strategy_name,
                     )
                     pm.close_position(symbol)
                     return False
@@ -938,6 +977,7 @@ class TradingEngine:
                     last_price,
                     pnl_dollar,
                     pos.side,
+                    strategy_name,
                 )
                 # Remove the position internally
                 pm.close_position(symbol)
@@ -954,7 +994,7 @@ class TradingEngine:
                 )
                 if not order_result:
                     log.error(f"Failed to place closing order for {symbol}")
-                    self.email.send_error_alert(
+                    self._alert_if_critical(
                         f"Trade failed for {symbol}: closing order rejected",
                         source=self._get_broker_source(broker)
                     )
@@ -965,7 +1005,7 @@ class TradingEngine:
                     log.error(
                         f"Closing order not filled for {symbol}: {fill['status']}"
                     )
-                    self.email.send_error_alert(
+                    self._alert_if_critical(
                         f"Trade failed for {symbol}: closing order not filled",
                         source=self._get_broker_source(broker)
                     )
@@ -1006,6 +1046,7 @@ class TradingEngine:
                     net_close_price,
                     pnl_dollar,
                     pos.side,
+                    strategy_name,
                 )
 
                 if filled_qty >= pos.quantity:
@@ -1068,7 +1109,7 @@ class TradingEngine:
 
             except Exception as e:  # noqa: BLE001
                 log.exception(f"Exit execution error for {symbol}: {e}")
-                self.email.send_error_alert(
+                self._alert_if_critical(
                     f"Trade failed for {symbol}: {e}",
                     source=self._get_broker_source(broker)
                 )
@@ -1541,6 +1582,7 @@ class TradingEngine:
                                             stop_loss=init_stop,
                                             stop_order_id=0,
                                             entry_time=datetime.now(timezone.utc),
+                                            strategy=None,
                                         )
                                     )
                                     pos = pm.positions[symbol]
@@ -1853,6 +1895,7 @@ class TradingEngine:
                             stop_loss=init_stop,
                             stop_order_id=0,
                             entry_time=entry_time,
+                            strategy=None,
                         )
                     )
                 else:
@@ -1897,7 +1940,7 @@ class TradingEngine:
             )
             action = "SELL" if pos.side == "BUY" else "BUY_TO_COVER"
             self._log_trade(
-                sym, action, exit_qty, pos.entry_price, exit_price, pnl_dollar, pos.side
+                sym, action, exit_qty, pos.entry_price, exit_price, pnl_dollar, pos.side, ""
             )
             last_logged_qty[sym] = current_qty
         for sym, pos in pm.positions.items():
@@ -2267,6 +2310,9 @@ class TradingEngine:
                 briefs[exchange] = {"report": report, "insight": insight}
                 # Still post to Telegram topic for that exchange
                 self.telegram.send_exchange_report(exchange, report)
+                # Send to Discord
+                if self.discord.enabled:
+                    self.discord.send_message(f"*{exchange} Market Report*\n{report}")
             except Exception as e:  # noqa: BLE001
                 log.warning(f"African report failed for {exchange}: {e}")
                 failed.append(exchange)
@@ -2295,6 +2341,9 @@ class TradingEngine:
                 briefs[exchange] = {"report": report, "insight": insight}
                 # Still post to Telegram topic for that exchange
                 self.telegram.send_exchange_report(exchange, report)
+                # Send to Discord
+                if self.discord.enabled:
+                    self.discord.send_message(f"*{exchange} Market Report*\n{report}")
             except Exception as e:  # noqa: BLE001
                 log.warning(f"African report failed for {exchange}: {e}")
 

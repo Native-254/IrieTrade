@@ -14,6 +14,7 @@ class Position:
     stop_order_id: int = 0
     tp_order_id: int = 0
     entry_time: datetime | None = None
+    strategy: str | None = None  # Strategy that opened this position
 
 
 class PositionManager:
