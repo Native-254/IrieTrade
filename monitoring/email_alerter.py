@@ -1,7 +1,7 @@
+import hashlib
 import json
 import os
 import re
-import hashlib
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
@@ -25,7 +25,7 @@ class EmailAlerter:
     # Error budgeting and deduplication
     # ------------------------------------------------------------------
     # Errors at or above this severity are eligible for email
-    _EMAIL_SEVERITIES = {"critical", "important"}
+    _EMAIL_SEVERITIES = {"critical", "important"}  # noqa: RUF012
 
     # Default dedup window per normalized message (hours)
     _DEFAULT_DEDUP_HOURS = 6
@@ -158,7 +158,7 @@ class EmailAlerter:
                         f"last sent {last_iso})"
                     )
                     return False
-            except Exception:  # noqa: BLE001
+            except Exception:  # noqa: BLE001, S110
                 pass
         hashes[key] = now.isoformat()
         # Keep the hash table small — prune anything older than 7 days

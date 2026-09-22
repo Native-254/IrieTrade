@@ -10,6 +10,7 @@ data/african_history
 data/nse_history
 .env
 config/settings.yaml
+settings.yaml
 .qodo
 FIX_TODO.md
 data/.welcome_shown
