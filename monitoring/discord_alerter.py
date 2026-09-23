@@ -10,9 +10,9 @@ class DiscordAlerter:
         self.config = CONFIG["monitoring"]["discord"]
         self.enabled = self.config["enabled"]
         if self.enabled:
-            self.webhook_url = self.config["webhook_url"]  # For trades
+            self.webhook_url = self.config["trades_webhook_url"]  # For trades
             self.error_webhook_url = self.config.get("error_webhook_url")  # For errors
-            self.nse_webhook_url = self.config.get("nse_webhook_url")
+            self.nse_webhook_url = self.config.get("african_markets_webhook_url")
             log.info("Discord alerter initialized.")
             if self.error_webhook_url:
                 log.info("Discord error webhook configured separately.")

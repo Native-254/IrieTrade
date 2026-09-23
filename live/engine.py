@@ -683,7 +683,7 @@ class TradingEngine:
             self._alert_if_critical(
                 f"Trade skipped for {symbol}: earnings nearby.",
                 source=self._get_broker_source(broker),
-                severity="critical"
+                severity="warning"
             )
             log.warning(f"Earnings nearby for {symbol}, trade blocked.")
             return False
@@ -694,7 +694,7 @@ class TradingEngine:
             self._alert_if_critical(
                 f"Short sale rejected for {symbol}: not enough shares",
                 source=self._get_broker_source(broker),
-                severity="critical"
+                severity="warning"
             )
             return False
 
@@ -761,7 +761,7 @@ class TradingEngine:
                         self._alert_if_critical(
                             f"Trade failed for {symbol}: bracket order rejected",
                             source=self._get_broker_source(broker),
-                            severity="critical"
+                            severity="important"
                         )
                         return False
 
@@ -829,7 +829,7 @@ class TradingEngine:
                     self._alert_if_critical(
                         f"Trade failed for {symbol}: {e}",
                         source=self._get_broker_source(broker),
-                        severity="critical"
+                        severity="important"
                     )
                     return False
 
@@ -848,7 +848,7 @@ class TradingEngine:
                         self._alert_if_critical(
                             f"Trade failed for {symbol}: plain order rejected",
                             source=self._get_broker_source(broker),
-                            severity="critical"
+                            severity="important"
                         )
                         return False
 
@@ -900,7 +900,7 @@ class TradingEngine:
                     self._alert_if_critical(
                         f"Trade failed for {symbol}: {e}",
                         source=self._get_broker_source(broker),
-                        severity="critical"
+                        severity="important"
                     )
                     return False
 
@@ -913,7 +913,7 @@ class TradingEngine:
                 self._alert_if_critical(
                     f"Trade failed for {symbol}: no position to close",
                     source=self._get_broker_source(broker),
-                    severity="critical"
+                    severity="important"
                 )
                 return False
 
@@ -1475,7 +1475,7 @@ class TradingEngine:
                 self._alert_if_critical(
                     f"Invalid capital guard trip: {broker_name} reported capital {capital}",
                     source="capital_guard",
-                    severity="critical"
+                    severity="important"
                 )
                 continue
 
@@ -1552,7 +1552,7 @@ class TradingEngine:
                             self._alert_if_critical(
                                 f"Stop-loss closure failed for {sym}",
                                 source="stop_loss",
-                                severity="critical"
+                                severity="important"
                             )
                     else:
                         log.warning(
@@ -1937,7 +1937,7 @@ class TradingEngine:
             self._alert_if_critical(
                 f"Position sync failed: {e}",
                 source="position_sync",
-                severity="critical"
+                severity="important"
             )
 
     def _reconcile_and_log_closed_positions(self, pm, last_logged_qty, latest_prices):
@@ -2337,7 +2337,7 @@ class TradingEngine:
                 self.telegram.send_exchange_report(exchange, report)
                 # Send to Discord
                 if self.discord.enabled:
-                    self.discord.send_message(f"*{exchange} Market Report*\n{report}")
+                    self.discord.send_nse_report(f"*{exchange} Market Report*\n{report}")
             except Exception as e:  # noqa: BLE001
                 log.warning(f"African report failed for {exchange}: {e}")
                 failed.append(exchange)
@@ -2368,7 +2368,7 @@ class TradingEngine:
                 self.telegram.send_exchange_report(exchange, report)
                 # Send to Discord
                 if self.discord.enabled:
-                    self.discord.send_message(f"*{exchange} Market Report*\n{report}")
+                    self.discord.send_nse_report(f"*{exchange} Market Report*\n{report}")
             except Exception as e:  # noqa: BLE001
                 log.warning(f"African report failed for {exchange}: {e}")
 

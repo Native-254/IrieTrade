@@ -11,8 +11,6 @@ data/nse_history
 .env
 config/settings.yaml
 settings.yaml
-.qodo
-FIX_TODO.md
 data/.welcome_shown
 live/data/.encryption_key
 engine.py.backup
@@ -23,3 +21,4 @@ os
 json
 requests
 email_thread_state.json
+email_error_state.json
