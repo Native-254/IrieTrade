@@ -390,7 +390,7 @@ class IBBroker(Broker):
             shortable_func = getattr(self.ib, "shortableShares", None)
             if shortable_func is None:
                 log.warning(f"Shortable check unsupported by IB API for {symbol}.")
-                return True
+                return False  # Changed from True to False to avoid sending orders for non-shortable symbols
             details = shortable_func(contract)
             if details and details.get("shortable", 0) >= quantity:
                 return True

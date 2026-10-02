@@ -58,6 +58,11 @@ class EmailAlerter:
         self._error_state_path.parent.mkdir(parents=True, exist_ok=True)
         self._error_state: dict = self._load_error_state()
 
+        # Buffering for email bundling - stores alerts per category per iteration
+        self._trade_buffer: list = []
+        self._error_buffer: list = []
+        self._africa_buffer: dict = {}
+
         providers = []
         if self.resend_enabled:
             providers.append("Resend")
@@ -314,6 +319,120 @@ class EmailAlerter:
         </p>
         """
 
+    def flush(self) -> None:
+        """Send all buffered emails and clear buffers. Call this at end of each iteration."""
+        # Send buffered trade alerts as a single email
+        if self._trade_buffer:
+            self._send_trade_buffer()
+            self._trade_buffer.clear()
+
+        # Send buffered error alerts as a single email
+        if self._error_buffer:
+            self._send_error_buffer()
+            self._error_buffer.clear()
+
+        # Send buffered Africa brief as a single email
+        if self._africa_buffer:
+            self._send_africa_buffer()
+            self._africa_buffer.clear()
+
+    def _send_trade_buffer(self) -> None:
+        """Send all buffered trade alerts in a single email."""
+        if not self._trade_buffer:
+            return
+
+        # Create a combined table for all trades
+        rows_html = ""
+        for trade in self._trade_buffer:
+            action_color = "#00b894" if trade['action'] in ("BUY", "BUY_TO_COVER") else "#e17055"
+            rows_html += f"""
+            <tr>
+                <td style="padding:8px 12px;border-bottom:1px solid #2d3436;color:#8395a7;">{trade['symbol']}</td>
+                <td style="padding:8px 12px;border-bottom:1px solid #2d3436;">
+                    <span style="color:{action_color};font-weight:600;">{trade['action']}</span>
+                </td>
+                <td style="padding:8px 12px;border-bottom:1px solid #2d3436;">{trade['quantity']}</td>
+                <td style="padding:8px 12px;border-bottom:1px solid #2d3436;">${trade['price']:,.4f}</td>
+                <td style="padding:8px 12px;border-bottom:1px solid #2d3436;">{trade['source'].upper()}</td>
+            </tr>
+            """
+
+        inner = f"""
+        <table style="width:100%;border-collapse:collapse;font-size:14px;">
+            <thead>
+                <tr>
+                    <th style="padding:8px 12px;border-bottom:2px solid #2d3436;color:#8395a7;">Symbol</th>
+                    <th style="padding:8px 12px;border-bottom:2px solid #2d3436;">Action</th>
+                    <th style="padding:8px 12px;border-bottom:2px solid #2d3436;">Quantity</th>
+                    <th style="padding:8px 12px;border-bottom:2px solid #2d3436;">Price</th>
+                    <th style="padding:8px 12px;border-bottom:2px solid #2d3436;">Broker</th>
+                </tr>
+            </thead>
+            <tbody>
+                {rows_html}
+            </tbody>
+        </table>
+        """
+        body = self._shell("Trade Executed - Buffer", "#00b894", inner)
+        self.send_message(self.SUBJECT_TRADES, body, self.CATEGORY_TRADES)
+
+    def _send_error_buffer(self) -> None:
+        """Send all buffered error alerts in a single email."""
+        if not self._error_buffer:
+            return
+
+        # For error buffer, we need to apply deduplication and budget checks again
+        # since we buffered them before checking
+        filtered_errors = []
+        for error in self._error_buffer:
+            # Re-apply the same checks as in send_error_alert
+            if error['severity'] not in self._EMAIL_SEVERITIES:
+                continue
+
+            effective_dedup = 0 if error['severity'] == "critical" else self._DEFAULT_DEDUP_HOURS
+            if effective_dedup > 0 and not self._error_dedup_ok(
+                error['error_msg'], effective_dedup
+            ):
+                continue
+
+            if not self._error_budget_ok():
+                continue
+
+            filtered_errors.append(error)
+
+        if not filtered_errors:
+            return
+
+        # Create a combined list of all errors
+        errors_html = ""
+        for error in filtered_errors:
+            errors_html += f"""
+            <p style="background:#1e1e2f;padding:14px;border-left:4px solid #e17055;
+                font-family:monospace;font-size:13px;line-height:1.5;color:#dfe6e9;">
+                [{error['source'].upper()}] {error['error_msg']}
+            </p>
+            """
+
+        inner = f"""
+        <div style="background:#1e1e2f;padding:20px;border-radius:10px;">
+            <h3 style="color:#e17055;margin-top:0;">Error Alerts ({len(filtered_errors)} total)</h3>
+            {errors_html}
+        </div>
+        """
+        body = self._shell("Error Alerts - Buffer", "#e17055", inner)
+        self.send_message(self.SUBJECT_ERRORS, body, self.CATEGORY_ERRORS)
+        # Record each sent email for budget tracking
+        for _ in filtered_errors:
+            self._record_email_sent()
+
+    def _send_africa_buffer(self) -> None:
+        """Send buffered Africa brief as a single email."""
+        if not self._africa_buffer:
+            return
+
+        body = self._africa_buffer['body']
+        self.send_message(self.SUBJECT_AFRICA, body, self.CATEGORY_AFRICA)
+
     def _shell(self, title: str, title_color: str, inner_html: str) -> str:
         return f"""
         <html>
@@ -339,6 +458,7 @@ class EmailAlerter:
         self, symbol: str, action: str, quantity: float, price: float,
         source: str = "general",
     ) -> None:
+        """Buffer trade alert for bundling - actual sending happens in flush()"""
         action_color = "#00b894" if action in ("BUY", "BUY_TO_COVER") else "#e17055"
 
         def row(k: str, v: str) -> str:
@@ -359,7 +479,15 @@ class EmailAlerter:
         </table>
         """
         body = self._shell("Trade Executed", action_color, inner)
-        self.send_message(self.SUBJECT_TRADES, body, self.CATEGORY_TRADES)
+        # Buffer the trade alert instead of sending immediately
+        self._trade_buffer.append({
+            'symbol': symbol,
+            'action': action,
+            'quantity': quantity,
+            'price': price,
+            'source': source,
+            'body': body
+        })
 
     def send_error_alert(
         self,
@@ -368,13 +496,7 @@ class EmailAlerter:
         severity: str = "important",
         dedup_hours: int = _DEFAULT_DEDUP_HOURS,
     ) -> None:
-        """Send an error email, subject to severity + dedup + budget rules.
-
-        severity:
-          - "critical" → always emails (still subject to daily budget)
-          - "important" (default) → emails once per dedup window
-          - "info" / "warning" → never emails, only logs
-        """
+        """Buffer error alert for bundling - actual sending happens in flush()"""
         # Layer 1: severity filter
         if severity not in self._EMAIL_SEVERITIES:
             log.debug(
@@ -403,11 +525,16 @@ class EmailAlerter:
             f'{error_msg}</p>'
         )
         body = self._shell(f"{severity.capitalize()} — {source.upper()}", "#e17055", inner)
-        self.send_message(self.SUBJECT_ERRORS, body, self.CATEGORY_ERRORS)
-        self._record_email_sent()
+        # Buffer the error alert instead of sending immediately
+        self._error_buffer.append({
+            'error_msg': error_msg,
+            'source': source,
+            'severity': severity,
+            'body': body
+        })
 
     def send_africa_brief(self, briefs: dict) -> None:
-        """briefs: {"NSE": {"report": str, "insight": str}, ...}"""
+        """Buffer Africa brief for bundling - actual sending happens in flush()"""
         sections = []
         for exchange, payload in briefs.items():
             report = payload.get("report", "")
@@ -433,4 +560,9 @@ class EmailAlerter:
 
         inner = "".join(sections)
         body = self._shell("African Market Briefs", "#00cec9", inner)
-        self.send_message(self.SUBJECT_AFRICA, body, self.CATEGORY_AFRICA)
+        # Buffer the Africa brief instead of sending immediately
+        # We'll store it as a dict since Africa briefs are structured differently
+        self._africa_buffer = {
+            'briefs': briefs,
+            'body': body
+        }

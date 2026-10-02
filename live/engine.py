@@ -710,6 +710,32 @@ class TradingEngine:
             min_notional = self._get_min_order_notional(broker, symbol)
             order_notional = filled_qty * slipped_price
 
+            # Balance check for BUY/BUY_TO_COVER orders
+            if action in ("BUY", "BUY_TO_COVER"):
+                try:
+                    account_info = broker.get_account_info()
+                    net_liquidation = float(account_info.get("net_liquidation", 0))
+                    # Calculate required cash for the order
+                    required_cash = filled_qty * slipped_price
+                    # Use a percentage of net liquidation for trading (respect risk limits)
+                    max_trade_amount = net_liquidation * self.kelly_fraction()
+                    if required_cash > max_trade_amount:
+                        log.warning(
+                            f"Skipping entry for {symbol}: insufficient balance. "
+                            f"Required: {required_cash:.2f}, Available: {max_trade_amount:.2f} "
+                            f"(Net Liquidation: {net_liquidation:.2f}, Kelly: {self.kelly_fraction():.2%})"
+                        )
+                        self._alert_if_critical(
+                            f"Insufficient balance for {symbol}: required {required_cash:.2f}, "
+                            f"available {max_trade_amount:.2f}",
+                            source=self._get_broker_source(broker),
+                            severity="warning"
+                        )
+                        return False
+                except Exception as e:
+                    log.debug(f"Balance check failed for {symbol}: {e}")
+                    # If balance check fails, continue with the order (don't block trading on check failure)
+
             # Base-size check (Kucoin enforces both base qty AND notional)
             constraints_fn = getattr(broker, "get_min_order_constraints", None)
             if callable(constraints_fn):
@@ -1573,11 +1599,20 @@ class TradingEngine:
                 )
                 self._apply_dynamic_exits(broker, pm, latest_prices)
 
-            # ──────────── Signal generation (per‑broker strategies) ────────────
-            symbols = list(
-                set(self.symbols_by_broker[broker_name]) | set(pm.positions.keys())
-            )
-            broker_strategies = self.strategies_by_broker.get(broker_name, self.strategies)
+            # Market hours gating for IBKR - skip signal generation when market is closed
+            if broker_name == "ib" and not self._is_market_open(broker):
+                log.info(
+                    f"US market is closed for {broker_name}, skipping signal generation and order placement."
+                )
+                # Still update positions and process exits, but skip new signal generation
+                symbols = list(pm.positions.keys())  # Only process existing positions for exits
+                broker_strategies = []  # No strategies for new entries
+            else:
+                # ──────────── Signal generation (per‑broker strategies) ────────────
+                symbols = list(
+                    set(self.symbols_by_broker[broker_name]) | set(pm.positions.keys())
+                )
+                broker_strategies = self.strategies_by_broker.get(broker_name, self.strategies)
 
             for symbol in symbols:
                 pos = pm.positions.get(symbol)
@@ -1858,6 +1893,9 @@ class TradingEngine:
 
         self.equity_history.append((datetime.now(timezone.utc), combined_nav))
         self.latest_prices = all_latest_prices
+
+        # Flush email buffers to send bundled alerts
+        self.email.flush()
 
     # ------------------------------------------------------------------
     # Helpers
